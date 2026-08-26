@@ -15,7 +15,7 @@ import {html} from "npm:htl";
 
 # Module 01 · Math Foundations
 
-This page runs in the browser, and its diagrams are live. Drag points and vector tips, or move sliders, to see the calculations and pictures update. As you read, change the inputs until each idea feels predictable rather than memorized. The helper functions used here are defined in [`components/vec2.js`](./components/vec2.js), [`vec3.js`](./components/vec3.js), and [`mat2.js`](./components/mat2.js).
+This page runs in the browser, and its diagrams are live. Drag points and vector tips, or move sliders, to see the calculations and pictures update. As you read, change the inputs until each idea feels predictable rather than memorized. The helper functions used here are defined in `components/vec2.js`, `vec3.js`, and `mat2.js`.
 
 ## Points and vectors
 
@@ -300,7 +300,7 @@ Every real matrix can be factored as ${tex`M = U\Sigma V^T`}, where **U** and **
 
 A useful consequence is that ${tex`M`} maps the unit circle to an ellipse. The ellipse’s semiaxis lengths are the singular values, and its principal directions are the columns of **U**.
 
-`mat2.svd` in [`mat2.js`](./components/mat2.js) computes this numerically by diagonalizing ${tex`M^TM`} to obtain **V** and the squared singular values, then recovering **U** from the action of ${tex`M`} on the right singular vectors.
+`mat2.svd` in `mat2.js` computes this numerically by diagonalizing ${tex`M^TM`} to obtain **V** and the squared singular values, then recovering **U** from the action of ${tex`M`} on the right singular vectors.
 
 ```js echo
 const svdForm = view(Inputs.form({
