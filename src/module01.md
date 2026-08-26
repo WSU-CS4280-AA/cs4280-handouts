@@ -1,14 +1,13 @@
 ---
-title: Module 01 · Math Foundations
-toc: false
+title: Week 01 — Math Foundations
+toc: true
 ---
 
 ```js echo
 import * as vec2 from "./components/vec2.js";
 import * as vec3 from "./components/vec3.js";
 import * as mat2 from "./components/mat2.js";
-import {plane, drawArrow, drawPolygon, drawEllipse, 
-  dragVectors, dragPoints} from "./components/vectorField.js";
+import {plane, drawArrow, drawPolygon, drawEllipse, dragVectors, dragPoints} from "./components/vectorField.js";
 import * as Inputs from "npm:@observablehq/inputs";
 import {html} from "npm:htl";
 ```
@@ -28,15 +27,22 @@ A **point** identifies a location: for example, a vertex, light position, or cam
 Drag the two points below. The arrow is the vector ${tex`\mathbf v = B - A`}, recomputed as the points move.
 
 ```js echo
-// TODO
+const pointsABWidget = dragPoints(
+  {A: {x: -2, y: -1}, B: {x: 2, y: 1.5}},
+  {domain: 4}
+);
+const pointsAB = view(pointsABWidget);
 ```
 
 ```js echo
-// TODO
+const {A, B} = pointsAB;
+const AB = vec2.sub(B, A);
 ```
 
 ```js echo
-// TODO
+pointsABWidget.redecorate((scene) => {
+  drawArrow(scene, A, B, {color: "seagreen", label: "v = B − A"});
+});
 ```
 
 **v** = (${AB.x.toFixed(2)}, ${AB.y.toFixed(2)}), with magnitude ‖**v**‖ = ${vec2.length(AB).toFixed(2)}. If both points move by the same displacement, **v** does not change: it depends only on the difference between the locations.
@@ -46,11 +52,15 @@ Drag the two points below. The arrow is the vector ${tex`\mathbf v = B - A`}, re
 The vectors **a** and **b** below are drawn from the origin. Drag their tips. Their values carry through the sections on addition, magnitude, dot products, and 2D cross products.
 
 ```js echo
-// TODO
+const abVectorsWidget = dragVectors(
+  {a: {x: 3, y: 1}, b: {x: 1, y: 2.2}},
+  {colors: ["steelblue", "orangered"], domain: 6}
+);
+const abVectors = view(abVectorsWidget);
 ```
 
 ```js echo
-// TODO
+const {a, b} = abVectors;
 ```
 
 Addition is component-wise. Geometrically, ${tex`\mathbf a + \mathbf b`} means “follow **a**, then follow a relocated copy of **b**.” Subtraction ${tex`\mathbf a - \mathbf b`} is the displacement from **b**’s tip to **a**’s tip. Scalar multiplication stretches a vector; a negative scalar also reverses its direction.
@@ -60,11 +70,18 @@ const scaleK = view(Inputs.range([-2, 2], {value: 1.5, step: 0.1, label: "k (sca
 ```
 
 ```js echo
-// TODO
+const vSum = vec2.add(a, b);
+const vDiff = vec2.sub(a, b);
+const vScaled = vec2.scale(a, scaleK);
 ```
 
 ```js echo
-// TODO
+abVectorsWidget.redecorate((scene) => {
+  drawArrow(scene, a, vSum, {color: "orangered", width: 1.5});
+  drawArrow(scene, {x: 0, y: 0}, vSum, {color: "seagreen", label: "a + b"});
+  drawArrow(scene, {x: 0, y: 0}, vDiff, {color: "purple", label: "a − b"});
+  drawArrow(scene, {x: 0, y: 0}, vScaled, {color: "gray", label: "k·a"});
+});
 ```
 
 `a + b` = (${vSum.x.toFixed(2)}, ${vSum.y.toFixed(2)}) · `a − b` = (${vDiff.x.toFixed(2)}, ${vDiff.y.toFixed(2)}) · ${html`<code>${scaleK.toFixed(1)}·a</code>`} = (${vScaled.x.toFixed(2)}, ${vScaled.y.toFixed(2)})
@@ -74,11 +91,17 @@ const scaleK = view(Inputs.range([-2, 2], {value: 1.5, step: 0.1, label: "k (sca
 A vector’s **magnitude** is its Euclidean length. **Normalization** divides a nonzero vector by its magnitude, producing a unit vector with the same direction. Surface normals, light directions, and camera basis vectors are commonly normalized before use in graphics calculations.
 
 ```js echo
-// TODO
+const aLength = vec2.length(a);
+const aHat = vec2.normalize(a);
 ```
 
 ```js echo
-// TODO
+(() => {
+  const scene = plane({domain: 5});
+  drawArrow(scene, {x: 0, y: 0}, a, {color: "steelblue", label: "a"});
+  drawArrow(scene, {x: 0, y: 0}, aHat, {color: "seagreen", label: "â (unit length)"});
+  return scene.svg.node();
+})()
 ```
 
 ‖**a**‖ = ${aLength.toFixed(3)}, and **â** = (${aHat.x.toFixed(3)}, ${aHat.y.toFixed(3)}), with ‖**â**‖ = ${vec2.length(aHat).toFixed(6)}. A zero vector has no direction and therefore cannot be normalized; avoid normalizing it in production code unless your vector utility defines an explicit fallback.
@@ -90,11 +113,23 @@ ${tex.block`\mathbf{a}\cdot\mathbf{b} = a_xb_x + a_yb_y = \|\mathbf{a}\|\,\|\mat
 The dot product maps two vectors to one scalar. Its sign identifies their relative direction: positive for broadly similar directions, negative for broadly opposite directions, and zero for perpendicular vectors. This is why ${tex`\mathbf N \cdot \mathbf L`} appears in diffuse lighting, and why orientation tests often reduce to sign checks.
 
 ```js echo
-// TODO
+const dotAB = vec2.dot(a, b);
+const angleABDeg = (vec2.angleBetween(a, b) * 180) / Math.PI;
+const projAonB = vec2.projectOnto(a, b);
 ```
 
 ```js echo
-// TODO
+(() => {
+  const scene = plane({domain: 5});
+  drawArrow(scene, {x: 0, y: 0}, a, {color: "steelblue", label: "a"});
+  drawArrow(scene, {x: 0, y: 0}, b, {color: "orangered", label: "b"});
+  drawArrow(scene, {x: 0, y: 0}, projAonB, {color: "seagreen", label: "proj of a onto b"});
+  scene.svg.append("line")
+    .attr("x1", scene.x(a.x)).attr("y1", scene.y(a.y))
+    .attr("x2", scene.x(projAonB.x)).attr("y2", scene.y(projAonB.y))
+    .attr("stroke", "gray").attr("stroke-dasharray", "4,3");
+  return scene.svg.node();
+})()
 ```
 
 **a**·**b** = ${dotAB.toFixed(2)}, and the angle between them is ${angleABDeg.toFixed(1)}°. **${dotAB > 0 ? "The dot product is positive, so a and b point in broadly similar directions." : dotAB < 0 ? "The dot product is negative, so a and b point in broadly opposite directions." : "The dot product is zero, so a and b are perpendicular."}** The green arrow is the projection of **a** onto **b**: the component of **a** that lies along **b**’s direction.
@@ -104,11 +139,18 @@ The dot product maps two vectors to one scalar. Its sign identifies their relati
 In 2D, ${tex`\mathbf{a}\times\mathbf{b} = a_xb_y - a_yb_x`} is a scalar, not a vector. Its magnitude is the area of the parallelogram spanned by **a** and **b**. Its sign indicates whether rotating from **a** to **b** is counterclockwise (+) or clockwise (−), which supports winding-order and front-face tests in rasterization.
 
 ```js echo
-// TODO
+const crossAB = vec2.cross(a, b);
+const parallelogramArea = Math.abs(crossAB);
 ```
 
 ```js echo
-// TODO
+(() => {
+  const scene = plane({domain: 6});
+  drawPolygon(scene, [{x: 0, y: 0}, a, vec2.add(a, b), b], {stroke: "seagreen", fill: "seagreen", opacity: 0.15});
+  drawArrow(scene, {x: 0, y: 0}, a, {color: "steelblue", label: "a"});
+  drawArrow(scene, {x: 0, y: 0}, b, {color: "orangered", label: "b"});
+  return scene.svg.node();
+})()
 ```
 
 `a × b` = ${crossAB.toFixed(2)}. **b** is ${crossAB > 0 ? "counterclockwise" : crossAB < 0 ? "clockwise" : "collinear"} relative to **a**. The shaded parallelogram has area ${parallelogramArea.toFixed(2)}, and triangle ${tex`(0, \mathbf a, \mathbf b)`} has area ${(parallelogramArea / 2).toFixed(2)}.
@@ -183,15 +225,19 @@ const M = view(Inputs.form({
 ${tex.block`M = \begin{bmatrix}${M.m00.toFixed(2)} & ${M.m01.toFixed(2)}\\${M.m10.toFixed(2)} & ${M.m11.toFixed(2)}\end{bmatrix}`}
 
 ```js echo
-// TODO
+const vInputWidget = dragVectors({v: {x: 1.5, y: 1}}, {colors: ["seagreen"], domain: 4});
+const vInput = view(vInputWidget);
 ```
 
 ```js echo
-// TODO
+const {v} = vInput;
+const Mv = mat2.apply(M, v);
 ```
 
 ```js echo
-// TODO
+vInputWidget.redecorate((scene) => {
+  drawArrow(scene, {x: 0, y: 0}, Mv, {color: "purple", label: "Mv"});
+});
 ```
 
 `Mv` = (${Mv.x.toFixed(2)}, ${Mv.y.toFixed(2)}). Try `m00 = m11 = 2, m01 = m10 = 0` for a uniform scale. Then try `m00 = m11 = 0, m01 = -1, m10 = 1` for a 90° counterclockwise rotation.
@@ -211,13 +257,24 @@ const srForm = view(Inputs.form({
 ```
 
 ```js echo
-// TODO
+const S = mat2.scaling(srForm.sx, srForm.sy);
+const R = mat2.rotation((srForm.thetaDeg * Math.PI) / 180);
+const RS = mat2.multiply(R, S); // scale first, then rotate
+const SR = mat2.multiply(S, R); // rotate first, then scale
+const orderDistance = mat2.frobeniusDistance(RS, SR);
 ```
 
 The unit square is transformed by **RS** (blue: scale, then rotate) and **SR** (orange: rotate, then scale). The gray outline is the original square.
 
 ```js echo
-// TODO
+(() => {
+  const square = [{x: 0, y: 0}, {x: 1, y: 0}, {x: 1, y: 1}, {x: 0, y: 1}];
+  const scene = plane({domain: 3});
+  drawPolygon(scene, square, {stroke: "gray"});
+  drawPolygon(scene, square.map((p) => mat2.apply(RS, p)), {stroke: "steelblue"});
+  drawPolygon(scene, square.map((p) => mat2.apply(SR, p)), {stroke: "orangered"});
+  return scene.svg.node();
+})()
 ```
 
 `‖RS − SR‖` = ${orderDistance.toFixed(3)}. This Frobenius-distance value is zero precisely when the two matrices agree. Set `thetaDeg` to 0, or make the scale uniform by setting `sx = sy`, to see cases in which these particular transformations commute.
@@ -249,7 +306,9 @@ const orthoTheta = view(Inputs.range([0, 360],
 ```
 
 ```js echo
-// TODO
+const R2 = mat2.rotation((orthoTheta * Math.PI) / 180);
+const QtQ = mat2.multiply(mat2.transpose(R2), R2);
+const inverseEqualsTranspose = mat2.frobeniusDistance(mat2.invert(R2), mat2.transpose(R2));
 ```
 ${tex.block`Q = \begin{bmatrix}${R2.m00.toFixed(4)} & ${R.m01.toFixed(4)}\\${R2.m10.toFixed(4)} & ${R2.m11.toFixed(4)}\end{bmatrix}`}
 
@@ -318,12 +377,23 @@ const M2 = {m00: svdForm.a, m01: svdForm.b, m10: svdForm.c, m11: svdForm.d};
 ${tex.block`M = \begin{bmatrix}${M2.m00.toFixed(2)} & ${M2.m01.toFixed(2)}\\${M2.m10.toFixed(2)} & ${M2.m11.toFixed(2)}\end{bmatrix}`}
 
 ```js echo
-// TODO
+const {U, singularValues, V} = mat2.svd(M2);
+const [sigma0, sigma1] = singularValues;
+const Sigma = {m00: sigma0, m01: 0, m10: 0, m11: sigma1};
+const reconstructed = mat2.multiply(mat2.multiply(U, Sigma), mat2.transpose(V));
+const reconResidual = mat2.frobeniusDistance(M2, reconstructed);
 ```
 
 ```js echo
 (() => {
-  // TODO
+  const [u0, u1] = mat2.columns(U);
+  const axisAngle = Math.atan2(u0.y, u0.x);
+  const scene = plane({domain: 3});
+  drawEllipse(scene, {rx: 1, ry: 1, stroke: "gray"});
+  drawEllipse(scene, {rx: sigma0, ry: sigma1, rotation: axisAngle, stroke: "seagreen"});
+  drawArrow(scene, {x: 0, y: 0}, vec2.scale(u0, sigma0), {color: "steelblue", label: "σ₀·u₀"});
+  drawArrow(scene, {x: 0, y: 0}, vec2.scale(u1, sigma1), {color: "orangered", label: "σ₁·u₁"});
+  return scene.svg.node();
 })()
 ```
 
@@ -358,17 +428,36 @@ const rosetteForm = view(Inputs.form({
 
 ```js echo
 function petalOutline(length, width, steps = 24) {
-  // TODO
+  const pts = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    pts.push({x: width * 4 * t * (1 - t), y: length * t});
+  }
+  for (let i = steps; i >= 0; i--) {
+    const t = i / steps;
+    pts.push({x: -width * 4 * t * (1 - t), y: length * t});
+  }
+  return pts;
 }
 ```
 
 ```js echo
-// TODO
+const basePetal = petalOutline(rosetteForm.length, rosetteForm.width);
+const rosettePetals = Array.from({length: rosetteForm.petals}, (_, i) => {
+  const theta = (rosetteForm.phase * Math.PI) / 180 + (i * 2 * Math.PI) / rosetteForm.petals;
+  const Rpetal = mat2.rotation(theta);
+  return basePetal.map((p) => mat2.apply(Rpetal, p));
+});
 ```
 
 ```js echo
 (() => {
-  // TODO
+  const scene = plane({domain: 3});
+  rosettePetals.forEach((petal, i) => {
+    const hue = Math.round((360 * i) / rosetteForm.petals);
+    drawPolygon(scene, petal, {stroke: `hsl(${hue}, 60%, 45%)`, fill: `hsl(${hue}, 70%, 60%)`, opacity: 0.55});
+  });
+  return scene.svg.node();
 })()
 ```
 
