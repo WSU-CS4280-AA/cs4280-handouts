@@ -3,7 +3,7 @@
 // Set to true to hide the sidebar and prev/next links on every weekly
 // handout page, so each week can be viewed/printed/shared standalone.
 // The home page (src/index.md) keeps its sidebar regardless.
-const standaloneWeeks = true;
+const standaloneWeeks = false;
 
 export default {
   // The app's title; used in the sidebar and webpage titles.

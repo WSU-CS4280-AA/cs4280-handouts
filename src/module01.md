@@ -310,7 +310,7 @@ const R2 = mat2.rotation((orthoTheta * Math.PI) / 180);
 const QtQ = mat2.multiply(mat2.transpose(R2), R2);
 const inverseEqualsTranspose = mat2.frobeniusDistance(mat2.invert(R2), mat2.transpose(R2));
 ```
-${tex.block`Q = \begin{bmatrix}${R2.m00.toFixed(4)} & ${R.m01.toFixed(4)}\\${R2.m10.toFixed(4)} & ${R2.m11.toFixed(4)}\end{bmatrix}`}
+${tex.block`Q = \begin{bmatrix}${R2.m00.toFixed(4)} & ${R2.m01.toFixed(4)}\\${R2.m10.toFixed(4)} & ${R2.m11.toFixed(4)}\end{bmatrix}`}
 
 ${tex.block`Q^TQ = \begin{bmatrix}${QtQ.m00.toFixed(4)} & ${QtQ.m01.toFixed(4)}\\${QtQ.m10.toFixed(4)} & ${QtQ.m11.toFixed(4)}\end{bmatrix}`}
 
@@ -474,6 +474,3 @@ Every petal is generated from the same local coordinates; only its rotation angl
 - Matrices represent linear transformations. Their multiplication order matters, and singular matrices have no inverse.
 - Orthonormal matrices preserve lengths and angles, so their inverse equals their transpose.
 - Scale, rotation, reflection, and shear are fundamental linear maps. SVD describes every matrix as orthonormal transforms around axis-aligned scaling.
-
-
-Happy learning!
