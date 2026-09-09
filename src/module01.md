@@ -91,14 +91,14 @@ abVectorsWidget.redecorate((scene) => {
 A vector’s **magnitude** is its Euclidean length. **Normalization** divides a nonzero vector by its magnitude, producing a unit vector with the same direction. Surface normals, light directions, and camera basis vectors are commonly normalized before use in graphics calculations.
 
 ```js echo
-const aLength = vec2.length(a);
-const aHat = vec2.normalize(a);
+const aLength = vec2.length(b);
+const aHat = vec2.normalize(b);
 ```
 
 ```js echo
 (() => {
   const scene = plane({domain: 5});
-  drawArrow(scene, {x: 0, y: 0}, a, {color: "steelblue", label: "a"});
+  drawArrow(scene, {x: 0, y: 0}, b, {color: "steelblue", label: "a"});
   drawArrow(scene, {x: 0, y: 0}, aHat, {color: "seagreen", label: "â (unit length)"});
   return scene.svg.node();
 })()

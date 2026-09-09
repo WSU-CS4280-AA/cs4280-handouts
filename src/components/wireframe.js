@@ -20,13 +20,16 @@ export const cubeEdges = [
 // via clip space and the perspective divide — returns null if the point
 // is behind the eye (w <= 0), where projection is undefined.
 export function project(mvp, p, width, height) {
-  const clip = mat4.transformPoint(mvp, p);
-  if (clip.w <= 0) return null;
+  // mat4.transformPoint/perspectiveDivide take and return plain arrays
+  // ([x, y, z] in, [x, y, z, w] out; see mat4.js), not {x, y, z} objects
+  // — so the point goes in as an array and the results are read by index.
+  const clip = mat4.transformPoint(mvp, [p.x, p.y, p.z]);
+  if (clip[3] <= 0) return null;
   const ndc = mat4.perspectiveDivide(clip);
   return {
-    x: (ndc.x * 0.5 + 0.5) * width,
-    y: (1 - (ndc.y * 0.5 + 0.5)) * height,
-    z: ndc.z
+    x: (ndc[0] * 0.5 + 0.5) * width,
+    y: (1 - (ndc[1] * 0.5 + 0.5)) * height,
+    z: ndc[2]
   };
 }
 
