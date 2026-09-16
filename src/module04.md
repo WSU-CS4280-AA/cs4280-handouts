@@ -10,7 +10,7 @@ import * as Inputs from "npm:@observablehq/inputs";
 import {html} from "npm:htl";
 ```
 
-# Week 04 · The Graphics Pipeline and WebGPU
+# Module 04 · The Graphics Pipeline and WebGPU
 
 Weeks 1–3 built the math — vectors, matrices, homogeneous coordinates,
 the MVP pipeline — entirely in plain JavaScript. This week asks *where*
