@@ -13,23 +13,23 @@ import {html} from "npm:htl";
 # Week 04 · The Graphics Pipeline and WebGPU
 
 Weeks 1–3 built the math — vectors, matrices, homogeneous coordinates,
-the MVP pipeline — entirely in plain JavaScript. This week asks **where**
+the MVP pipeline — entirely in plain JavaScript. This week asks *where*
 that math actually runs: inside a highly parallel, partly-programmable
-****pipeline**** implemented by real GPU hardware, driven from the browser by
-****WebGPU****. By the end of this page a real GPU renders a real triangle,
+**pipeline** implemented by real GPU hardware, driven from the browser by
+**WebGPU**. By the end of this page a real GPU renders a real triangle,
 and every line of code that got it there will be traceable back to a
 specific pipeline stage.
 
-This handout needs ****Chrome or Edge 113+**** (WebGPU enabled by default) —
+This handout needs **Chrome or Edge 113+** (WebGPU enabled by default) —
 Firefox and Safari have only partial support as of 2026. It teaches the
 **techniques** behind the pipeline and the API; it is not a walkthrough of
 any graded assignment.
 
-## 1. Why a Pipeline?**
+## Why a Pipeline?
 
-A GPU is optimized for ****throughput****, not latency: thousands of simple
-execution units apply the **same** instruction to thousands of data
-elements simultaneously — a model called ****SIMT**** (single instruction,
+A GPU is optimized for **throughput**, not latency: thousands of simple
+execution units apply the *same* instruction to thousands of data
+elements simultaneously — a model called **SIMT** (single instruction,
 multiple threads). Rendering hands the GPU exactly the kind of work this
 suits: transform a million vertices, shade two million fragments, all
 independent of one another. The pipeline is the fixed sequence every one
@@ -61,17 +61,17 @@ of them flows through:
 })()
 ```
 
-The two ****blue**** stages are **programmable** — you supply the code, written
-in ****WGSL****. Everything else is **fixed-function**: configurable through
+The two **blue** stages are *programmable* — you supply the code, written
+in **WGSL**. Everything else is **fixed-function**: configurable through
 pipeline state, but not replaceable with arbitrary code. Week 3's model,
-view, and projection matrices run entirely inside the ****vertex shader****
+view, and projection matrices run entirely inside the **vertex shader**
 stage; the perspective divide happens as part of clipping.
 
-## 2. Meet Your GPU**
+## Meet Your GPU
 
-Every WebGPU program starts by requesting an ****adapter**** (a physical GPU)
-and a logical ****device**** connected to it. This isn't a simulated example
-— it queries **your** actual browser and hardware, right now:
+Every WebGPU program starts by requesting an **adapter** (a physical GPU)
+and a logical **device** connected to it. This isn't a simulated example
+— it queries *your* actual browser and hardware, right now:
 
 ```js echo
 const {adapter, device} = await webgpu.requestDevice();
@@ -121,21 +121,20 @@ of the whole object graph:
 })()
 ```
 
-## 3. Buffers, Textures, and Samplers**
+## Buffers, Textures, and Samplers
 
 | Resource | Holds |
 |---|---|
-| ****Buffer**** | Untyped linear memory — vertex data, index data, small uniform data, or larger read-write storage data |
-| ****Texture**** | Multidimensional, format-aware image data — color maps, depth buffers, render targets |
-| ****Sampler**** | **How** to read a texture (filtering, addressing) — holds no image data itself |
+| **Buffer** | Untyped linear memory — vertex data, index data, small uniform data, or larger read-write storage data |
+| **Texture** | Multidimensional, format-aware image data — color maps, depth buffers, render targets |
+| **Sampler** | *How* to read a texture (filtering, addressing) — holds no image data itself |
 
 A `usage` flag combination declares which roles a buffer may play,
-catching misuse at **creation** time rather than at draw time — one
-instance of a theme that runs through the whole API: **declare pipeline
-state up front, validate once**, instead of re-checking on every call, as
+catching misuse at *creation* time rather than at draw time — one
+instance of a theme that runs through the whole API: **declare pipeline state up front, validate once**, instead of re-checking on every call, as
 older implicit APIs like OpenGL had to.
 
-## 4. WGSL: a Shader for Every Stage**
+## WGSL: a Shader for Every Stage
 
 WGSL (WebGPU Shading Language) is portable (compiles to Metal/HLSL/SPIR-V
 internally), strongly typed, and memory-safe — a shader cannot be used to
@@ -169,13 +168,13 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 `@location(n)` marks per-vertex inputs and interpolated outputs;
 `@builtin(position)` is pipeline-defined — clip-space position leaving
 the vertex shader, screen-space position entering the fragment shader.
-`vs_main` runs once per ****vertex****; `fs_main` runs once per ****fragment****,
+`vs_main` runs once per **vertex**; `fs_main` runs once per **fragment**,
 with `color` automatically interpolated across the triangle by
-****barycentric coordinates**** during rasterization — which is exactly why
+**barycentric coordinates** during rasterization — which is exactly why
 the triangle below comes out a smooth gradient from three flat input
 colors.
 
-## 5. Building the Triangle**
+## Building the Triangle
 
 Every step below maps to one WebGPU object already introduced. First,
 three vertices — position and color interleaved — and a `GPUBuffer` to
@@ -198,7 +197,7 @@ vertexBuffer.unmap();
 ```
 
 The shader from §4, compiled into a `GPUShaderModule`, then wired to the
-vertex layout and canvas pixel format inside one ****immutable****
+vertex layout and canvas pixel format inside one **immutable**
 `GPURenderPipeline` — created once, never inside a render loop, because
 creating it is exactly when the browser compiles and validates
 everything:
@@ -253,7 +252,7 @@ const pipeline = device.createRenderPipeline({
 });
 ```
 
-Finally, a `GPUCommandEncoder` records one ****render pass**** — clear the
+Finally, a `GPUCommandEncoder` records one **render pass** — clear the
 canvas, bind the pipeline and vertex buffer, draw 3 vertices — and
 `device.queue.submit` hands the finished command buffer to the GPU. The
 browser presents the result to the canvas automatically once it's done:
@@ -283,9 +282,9 @@ vertex buffer → shader module → pipeline → render pass → submit. Every
 object above traces back to §1's pipeline diagram or §3's resource table
 — nothing here is unexplained magic.
 
-## 6. Extending It: an MVP Uniform, Live**
+## Extending It: an MVP Uniform, Live
 
-The lecture's own next step is a ****uniform**** — data shared by every
+The lecture's own next step is a **uniform** — data shared by every
 invocation in a draw call, bound through a `@group`/`@binding` pair. Here
 it's exactly the kind of matrix Week 3 built: `mat4.js`'s `translate`,
 `rotateZ`, and `scale`, composed and uploaded as a WGSL
@@ -416,7 +415,7 @@ device.queue.writeBuffer(uniformBuffer, 0, xformMatrix);
 drawTransformed();
 ```
 
-The pipeline, shader module, and both buffers were created ****once****,
+The pipeline, shader module, and both buffers were created **once**,
 above; dragging a slider only calls `queue.writeBuffer` (upload 64 new
 bytes) and re-records a fresh render pass — the exact "create once,
 update per frame" discipline the lecture calls out as the difference
@@ -429,7 +428,7 @@ animating on its own.
 the same array-based matrix functions Assignment 2's starter code
 composes into its own MVP uniform, not just the same math.
 
-## Common Pitfalls**
+## Common Pitfalls
 
 \- ****Confusing buffers and textures**** — a `GPUBuffer` is untyped linear
   memory; a `GPUTexture` carries explicit dimensionality, format, and mip
@@ -445,10 +444,10 @@ composes into its own MVP uniform, not just the same math.
 \- ****Mixing CPU and GPU responsibilities**** — per-vertex and per-fragment
   computation belongs in WGSL, not JavaScript.
 
-## Summary**
+## Summary
 
-\- The graphics pipeline has ****programmable**** stages (vertex, fragment —
-  written in WGSL) and ****fixed-function**** stages (assembly, clipping,
+\- The graphics pipeline has **programmable** stages (vertex, fragment —
+  written in WGSL) and **fixed-function** stages (assembly, clipping,
   rasterization, per-fragment tests) — configurable, not replaceable.
 \- WebGPU's core objects — **adapter, device, queue, buffer, texture,
   sampler** — form one object graph, everything ultimately created from
@@ -456,14 +455,7 @@ composes into its own MVP uniform, not just the same math.
 \- A complete program is seven traceable steps: request device → configure
   canvas → vertex buffer → shader module → render pipeline → render pass
   → submit.
-\- ****Pipelines are immutable**** and created once; ****uniforms****, bound
+\- **Pipelines are immutable** and created once; **uniforms**, bound
   through `@group`/`@binding`, are how per-draw data — like Week 3's MVP
   matrix — reaches a shader without rebuilding the pipeline.
 
-## Looking Ahead to Week 5**
-
-Week 5 keeps this exact seven-step skeleton and changes only the shader
-**content**: per-vertex normals, ambient/diffuse/specular lighting math,
-and a real comparison of flat vs. smooth shading — the first week a
-rendered surface actually looks like something, rather than a flat-color
-triangle.
