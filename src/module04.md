@@ -1,5 +1,5 @@
 ---
-title: Week 04 — Graphics Pipeline & WebGPU
+title: Module 04 — Graphics Pipeline & WebGPU
 toc: true
 ---
 

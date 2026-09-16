@@ -1,5 +1,5 @@
 ---
-title: Week 01 — Math Foundations
+title: Module 01 — Math Foundations
 toc: true
 ---
 
