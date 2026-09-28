@@ -20,7 +20,7 @@ Week 1 introduced linear transformations—scaling, rotation, reflection, and sh
 
 That one extension supports the rest of the graphics pipeline. We will compose object transforms, express the scene relative to a camera, and project 3D geometry onto a 2D screen. This module focuses on the mathematics and conventions behind those operations; Week 4 applies the same ideas in WebGPU.
 
-## 1. Why Translation Is Different
+## Why Translation Is Different
 
 An **affine transformation** has the form ${tex`\mathbf{p}' = A\mathbf{p} + \mathbf{t}`}, where ${tex`A`} is the linear part and ${tex`\mathbf{t}`} is a translation vector. Affine transformations preserve straight lines, parallelism, and ratios along a line.
 
@@ -32,7 +32,7 @@ mat2.apply(mat2.scaling(3, 3), {x: 0, y: 0})
 
 The result is still ${tex`(0,0)`}. No ordinary 2×2 matrix can map the origin to a nonzero location, so translation is not linear. Homogeneous coordinates incorporate that added offset into a larger matrix.
 
-## 2. Homogeneous Coordinates
+## Homogeneous Coordinates
 
 Represent a 2D point as ${tex`(x,y,1)`} and a 2D displacement vector as ${tex`(x,y,0)`}. The final coordinate, ${tex`w`}, distinguishes the two cases.
 
@@ -95,7 +95,7 @@ const Vprime = mat3.transformVector(T, V);
 
 **V′** = (${Vprime.x.toFixed(2)}, ${Vprime.y.toFixed(2)}). It is identical to **V**, so the purple arrow lies directly on top of the green arrow.
 
-## 3. Composition in 2D
+## Composition in 2D
 
 With homogeneous coordinates, every 2D affine transformation is a 3×3 matrix:
 
@@ -201,7 +201,7 @@ Rotate-then-translate ends at (${rotateThenTranslate.x.toFixed(0)}, ${rotateThen
 
 Whenever translation and rotation are combined, ask: **which point is the rotation about?** The answer follows from the order of multiplication.
 
-## 4. Transformations in 3D
+## Transformations in 3D
 
 The same construction extends to 3D. A point becomes ${tex`(x,y,z,1)`}; a vector becomes ${tex`(x,y,z,0)`}; and affine transformations use 4×4 matrices. The module’s [`components/mat4.js`](./components/mat4.js) represents matrices as flat, column-major arrays, matching the convention typically used by graphics APIs.
 
@@ -266,7 +266,7 @@ wireframe.renderWireframe(gimbalMVP, {width: 320, height: 320})
 
 At this fixed pitch, the visible orientation depends on the difference ${tex`\mathrm{yaw}-\mathrm{roll}`}. The current effective rotation is ${((gimbalForm.yaw - gimbalForm.roll)).toFixed(0)}°. For example, yaw = 40° and roll = 0° produces the same orientation as yaw = 0° and roll = −40°.
 
-## 5. From Object Space to Screen Space
+## From Object Space to Screen Space
 
 A mesh vertex passes through several coordinate spaces:
 
@@ -347,7 +347,7 @@ screen  (${screenVertex[0].toFixed(0)}, ${screenVertex[1].toFixed(0)}) px   (on 
 
 Move `world z` closer to 0. As the vertex approaches the camera plane, clip-space ${tex`w`} approaches zero, making the perspective divide unstable or undefined. The graphics pipeline clips primitives in clip space before performing that divide.
 
-## 6. The Virtual Camera
+## The Virtual Camera
 
 A graphics camera is represented by an eye position, a target point, and an up-direction hint. From these values, `lookAt` constructs an orthonormal camera basis. The **view matrix** does not physically move a camera object; instead, it transforms the whole world into coordinates relative to that camera:
 
@@ -384,7 +384,7 @@ Eye position: (${eye[0].toFixed(2)}, ${eye[1].toFixed(2)}, ${eye[2].toFixed(2)})
 
 The rendered view changes even though the cube does not. The view matrix re-expresses every object relative to the current eye position and viewing direction.
 
-## 7. Projection
+## Projection
 
 **Orthographic projection** uses parallel projection rays. It preserves apparent size with depth: a cube twice as far away appears the same size. In homogeneous form, ${tex`w`} remains 1, so there is no meaningful perspective divide.
 
@@ -440,7 +440,7 @@ const orthoMVP = mat4.multiplyAll([orthoProjection, compareView, mat4.identity()
 
 From the same eye position, perspective projection makes the near face look larger than the far face and can make parallel 3D edges converge on screen. Orthographic projection retains parallel edges and does not use depth to change apparent size, which is useful in CAD, technical drawing, and many interface views.
 
-## 8. The Full Pipeline
+## The Full Pipeline
 
 For a vertex represented by a column vector, the pipeline is
 
