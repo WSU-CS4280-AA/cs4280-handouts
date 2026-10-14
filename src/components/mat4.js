@@ -1,7 +1,7 @@
 // GENERATED FILE — do not edit directly.
-// Synced from reference/lib/math/mat4.js, reference/lib/math/transforms.js by scripts/sync-math.js
+// Synced from reference/src/lib/math/mat4.js, reference/src/lib/math/transforms.js by scripts/sync-reference.js
 // (runs automatically before dev/build/deploy). Edit the source files in
-// reference/lib/math/ and re-run `npm run sync-math` instead.
+// reference/src/lib/ and re-run `npm run sync-reference` instead.
 
 import * as vec3 from "./vec3.js";
 
@@ -168,6 +168,23 @@ export function scale(sx, sy, sz) {
   m[0] = sx;
   m[5] = sy;
   m[10] = sz;
+  return m;
+}
+
+/**
+ * A general shear: each coefficient displaces one axis by a multiple of
+ * another (e.g. `xy` shifts X by `xy * y`). Leave the rest at 0 for a
+ * single-axis shear, e.g. `shear(0.5)` is the classic "slanted rectangle"
+ * shearing X by Y.
+ */
+export function shear(xy = 0, xz = 0, yx = 0, yz = 0, zx = 0, zy = 0) {
+  const m = identity();
+  m[4] = xy;
+  m[8] = xz;
+  m[1] = yx;
+  m[9] = yz;
+  m[2] = zx;
+  m[6] = zy;
   return m;
 }
 

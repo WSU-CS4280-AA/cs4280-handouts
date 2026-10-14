@@ -4,7 +4,18 @@
 // sphere) since this file is specifically about *adjacency* and
 // *validity*, not generation.
 
-import * as vec3 from "./vec3.js";
+// Small {x, y, z} vector helpers. (vec3.js is generated from the shared
+// math library and uses [x, y, z] arrays, while meshes here store points
+// as objects, so this file keeps its own.)
+const vec3 = {
+  add: (a, b) => ({x: a.x + b.x, y: a.y + b.y, z: a.z + b.z}),
+  sub: (a, b) => ({x: a.x - b.x, y: a.y - b.y, z: a.z - b.z}),
+  scale: (a, s) => ({x: a.x * s, y: a.y * s, z: a.z * s}),
+  cross: (a, b) => ({x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x}),
+  length: (a) => Math.hypot(a.x, a.y, a.z),
+  normalize: (a) => { const l = Math.hypot(a.x, a.y, a.z) || 1; return {x: a.x / l, y: a.y / l, z: a.z / l}; },
+  triangleNormal: (p0, p1, p2) => vec3.normalize(vec3.cross(vec3.sub(p1, p0), vec3.sub(p2, p0)))
+};
 
 function edgeKey(a, b) {
   return a < b ? `${a},${b}` : `${b},${a}`;

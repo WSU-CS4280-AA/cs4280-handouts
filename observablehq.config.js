@@ -1,3 +1,5 @@
+import {codeCollapseHead} from "./codeCollapse.js";
+
 // See https://observablehq.com/framework/config for documentation.
 
 // Set to true to hide the sidebar and prev/next links on every weekly
@@ -19,7 +21,8 @@ export default {
   // ],
 
   // Content to add to the head of the page, e.g. for a favicon:
-  head: '<link rel="icon" href="observable.png" type="image/png" sizes="32x32">',
+  // codeCollapseHead collapses long code blocks (see codeCollapse.js).
+  head: '<link rel="icon" href="observable.png" type="image/png" sizes="32x32">' + codeCollapseHead,
 
   // The path to the source root.
   root: "src",

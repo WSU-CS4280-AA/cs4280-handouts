@@ -40,6 +40,23 @@ hide the sidebar and prev/next links on every weekly handout (useful for
 printing or sharing a single week standalone). The home page keeps its
 sidebar regardless.
 
+## Shared code from `reference/`
+
+`scripts/sync-reference.js` copies shared library code from
+`../reference/src/lib` into `src/components`, so the handouts use the same
+helpers as the assignments:
+
+| Generated file | Source |
+| --- | --- |
+| `src/components/vec3.js` | `reference/src/lib/math/vec3.js` |
+| `src/components/mat4.js` | `reference/src/lib/math/mat4.js` + `transforms.js` (merged) |
+| `src/components/lib/webgpu.js` | `reference/src/lib/webgpu.js` |
+
+It runs automatically before `npm run dev`, `build`, and `deploy`, or by
+hand with `npm run sync-reference`. Don't edit the generated files; edit
+the sources in `reference/src/lib` instead. If `../reference` is missing,
+the committed copies are kept.
+
 ## Command reference
 
 | Command | Description |
@@ -48,3 +65,4 @@ sidebar regardless.
 | `npm run dev` | Start local preview server |
 | `npm run build` | Build the static site to `./dist` |
 | `npm run clean` | Clear the local data loader cache |
+| `npm run sync-reference` | Re-copy the shared library code from `../reference/src/lib` |

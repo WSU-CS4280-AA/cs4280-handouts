@@ -50,7 +50,7 @@ export function parseOBJ(text) {
   return {positions, texcoords, normals, faces, faceMaterials};
 }
 
-// Parses MTL text into { materialName: {Kd:[r,g,b], Ks:[r,g,b], Ns} }.
+// Parses MTL text into { materialName: {Kd:[r,g,b], Ks:[r,g,b], Ns, map_Kd?} }.
 export function parseMTL(text) {
   const materials = {};
   let current = null;
@@ -67,6 +67,8 @@ export function parseMTL(text) {
       materials[current].Ks = rest.map(Number);
     } else if (tag === "Ns" && current) {
       materials[current].Ns = Number(rest[0]);
+    } else if (tag === "map_Kd" && current) {
+      materials[current].map_Kd = rest.join(" "); // file name of the diffuse texture
     }
   }
   return materials;

@@ -14,9 +14,24 @@ import {html} from "npm:htl";
 
 # Module 01 · Math Foundations
 
-This page runs in the browser, and its diagrams are live. Drag points and vector tips, or move sliders, to see the calculations and pictures update. As you read, change the inputs until each idea feels predictable rather than memorized. The helper functions used here are defined in `components/vec2.js`, `vec3.js`, and `mat2.js`.
+Almost every computation in graphics is built from a small set of
+mathematical objects. This module builds each one and makes it live:
 
-## Points and vectors
+| Object | What it represents |
+|---|---|
+| **Points and vectors** | Locations, and the displacements between them |
+| **Dot and cross products** | Alignment, projection, signed area, and normals |
+| **Matrices** | Linear transformations and their composition |
+| **Linear transformations** | Scale, rotation, reflection, shear, and their decomposition by SVD |
+
+Drag points and vector tips, or move sliders, to see the calculations and
+pictures update. The helper functions are defined in
+`components/vec2.js`, `vec3.js`, and `mat2.js`.
+Everything here is plain JavaScript, so no GPU is needed. This handout
+teaches the *techniques* behind the module; it is not a walkthrough of
+any graded assignment.
+
+## Points and Vectors
 
 A **point** identifies a location: for example, a vertex, light position, or camera position. A **vector** identifies a displacement: a direction and magnitude with no fixed location. The distinction matters because their geometric arithmetic differs:
 
@@ -47,7 +62,7 @@ pointsABWidget.redecorate((scene) => {
 
 **v** = (${AB.x.toFixed(2)}, ${AB.y.toFixed(2)}), with magnitude ‖**v**‖ = ${vec2.length(AB).toFixed(2)}. If both points move by the same displacement, **v** does not change: it depends only on the difference between the locations.
 
-## Vector arithmetic
+## Vector Arithmetic
 
 The vectors **a** and **b** below are drawn from the origin. Drag their tips. Their values carry through the sections on addition, magnitude, dot products, and 2D cross products.
 
@@ -91,14 +106,14 @@ abVectorsWidget.redecorate((scene) => {
 A vector’s **magnitude** is its Euclidean length. **Normalization** divides a nonzero vector by its magnitude, producing a unit vector with the same direction. Surface normals, light directions, and camera basis vectors are commonly normalized before use in graphics calculations.
 
 ```js echo
-const aLength = vec2.length(b);
-const aHat = vec2.normalize(b);
+const aLength = vec2.length(a);
+const aHat = vec2.normalize(a);
 ```
 
 ```js echo
 (() => {
   const scene = plane({domain: 5});
-  drawArrow(scene, {x: 0, y: 0}, b, {color: "steelblue", label: "a"});
+  drawArrow(scene, {x: 0, y: 0}, a, {color: "steelblue", label: "a"});
   drawArrow(scene, {x: 0, y: 0}, aHat, {color: "seagreen", label: "â (unit length)"});
   return scene.svg.node();
 })()
@@ -203,7 +218,7 @@ Scaling, rotation, reflection, and shear are **linear transformations**. In 2D, 
 vec2.length(mat2.apply(mat2.scaling(5, -3), {x: 0, y: 0}))
 ```
 
-Translation cannot be represented by a 2×2 linear transformation because translation moves the origin. Homogeneous coordinates, introduced in Week 3, extend the representation so translations can participate in the same matrix-composition framework.
+Translation cannot be represented by a 2×2 linear transformation because translation moves the origin. Homogeneous coordinates, introduced in Module 03, extend the representation so translations can participate in the same matrix-composition framework.
 
 The main payoff is composition: a sequence such as “scale, then rotate, then shear” can be represented by one matrix and applied efficiently to many vertices.
 
@@ -242,7 +257,7 @@ vInputWidget.redecorate((scene) => {
 
 `Mv` = (${Mv.x.toFixed(2)}, ${Mv.y.toFixed(2)}). Try `m00 = m11 = 2, m01 = m10 = 0` for a uniform scale. Then try `m00 = m11 = 0, m01 = -1, m10 = 1` for a 90° counterclockwise rotation.
 
-## Matrix–matrix multiplication and order
+### Matrix–matrix multiplication and order
 
 ${tex.block`(AB)_{ij} = \sum_k A_{ik}B_{kj}`}
 
@@ -292,7 +307,7 @@ const Minv = isSingular ? null : mat2.invert(M);
 const identityResidual = isSingular ? null : mat2.frobeniusDistance(mat2.multiply(M, Minv), mat2.identity());
 ```
 
-`det(M)` = ${det.toFixed(3)} — ${isSingular ? "M is singular at the displayed precision. It collapses the plane into a lower-dimensional set, so no matrix can recover the lost information." : `M is invertible. ‖M·M⁻¹ − I‖ = ${identityResidual.toFixed(6)}, showing agreement with the identity up to floating-point error.`}
+`det(M)` = ${det.toFixed(3)}. ${isSingular ? "M is singular at the displayed precision. It collapses the plane into a lower-dimensional set, so no matrix can recover the lost information." : `M is invertible. ‖M·M⁻¹ − I‖ = ${identityResidual.toFixed(6)}, showing agreement with the identity up to floating-point error.`}
 
 Experiment with matrices whose rows or columns are proportional, such as `m00 = 1, m01 = 2, m10 = 0.5, m11 = 1`. Their determinant is zero, so they collapse one direction and cannot be inverted.
 
@@ -310,13 +325,16 @@ const R2 = mat2.rotation((orthoTheta * Math.PI) / 180);
 const QtQ = mat2.multiply(mat2.transpose(R2), R2);
 const inverseEqualsTranspose = mat2.frobeniusDistance(mat2.invert(R2), mat2.transpose(R2));
 ```
+
 ${tex.block`Q = \begin{bmatrix}${R2.m00.toFixed(4)} & ${R2.m01.toFixed(4)}\\${R2.m10.toFixed(4)} & ${R2.m11.toFixed(4)}\end{bmatrix}`}
 
 ${tex.block`Q^TQ = \begin{bmatrix}${QtQ.m00.toFixed(4)} & ${QtQ.m01.toFixed(4)}\\${QtQ.m10.toFixed(4)} & ${QtQ.m11.toFixed(4)}\end{bmatrix}`}
 
-The result is the identity, up to floating-point rounding, for every rotation angle. Likewise, `‖R⁻¹ − Rᵀ‖` = ${inverseEqualsTranspose.toFixed(6)}. This transpose shortcut depends on orthonormality; it does not generally work for an arbitrary matrix such as **M** from §6.
+The result is the identity, up to floating-point rounding, for every rotation angle. Likewise, `‖R⁻¹ − Rᵀ‖` = ${inverseEqualsTranspose.toFixed(6)}. This transpose shortcut depends on orthonormality; it does not generally work for an arbitrary matrix such as **M** from the matrix–vector section.
 
-### Linear transformations
+## Linear Transformations
+
+### A gallery of linear maps
 
 Scale, rotation, reflection, and shear are common families of 2D linear maps. Scale stretches along coordinate axes; rotation turns vectors; reflection reverses orientation; and shear moves points parallel to one axis by an amount proportional to their coordinate on the other axis.
 
@@ -353,6 +371,7 @@ The gray square is unchanged. The green square undergoes reflection, shear, scal
 ```js echo
 mat2.determinant(galleryComposite).toFixed(3)
 ```
+
 ### Singular value decomposition (conceptual)
 
 Every real matrix can be factored as ${tex`M = U\Sigma V^T`}, where **U** and **V** are orthonormal and **Σ** is diagonal with nonnegative entries. Geometrically, this is a rotation or reflection by ${tex`V^T`}, scaling along perpendicular axes by the singular values in ${tex`\Sigma`}, then a rotation or reflection by ${tex`U`}.
@@ -399,7 +418,7 @@ const reconResidual = mat2.frobeniusDistance(M2, reconstructed);
 
 Singular values: σ₀ = ${sigma0.toFixed(3)}, σ₁ = ${sigma1.toFixed(3)}. The reconstruction residual `‖M − UΣVᵀ‖` is ${reconResidual.toExponential(2)}. Values near zero indicate that the decomposition reconstructs the input matrix to floating-point precision. Make the rows or columns proportional to observe one singular value approach zero and the ellipse collapse toward a line segment.
 
-## Final Example: Rosette
+### Rosettes: repeated rotation
 
 A rotation matrix can be applied repeatedly to create evenly spaced copies of a shape. For ${tex`k`} petals and phase ${tex`\varphi`}, the angle of copy ${tex`i`} is
 
@@ -411,10 +430,6 @@ ${tex.block`x(t) = 4w\,t(1-t), \qquad y(t) = \ell t, \qquad t \in [0, 1]`}
 
 The factor ${tex`t(1-t)`} is zero at the base and tip and reaches ${tex`\tfrac14`} at the midpoint. Multiplying it by ${tex`4w`} makes the maximum half-width exactly ${tex`w`}. The left edge mirrors the right edge.
 
-<div style="position: relative;">
-
-<div style="position: sticky; top: 12px; z-index: 2; background: var(--theme-background, #0d0d0d); padding-block: 8px 4px;">
-
 ```js echo
 const rosetteForm = view(Inputs.form({
   petals: Inputs.range([1, 24], {value: 8, step: 1, label: "petal count k"}),
@@ -423,8 +438,6 @@ const rosetteForm = view(Inputs.form({
   phase: Inputs.range([0, 360], {value: 0, step: 1, label: "phase offset (degrees)"})
 }));
 ```
-
-</div>
 
 ```js echo
 function petalOutline(length, width, steps = 24) {
@@ -461,16 +474,77 @@ const rosettePetals = Array.from({length: rosetteForm.petals}, (_, i) => {
 })()
 ```
 
-</div>
-
 Every petal is generated from the same local coordinates; only its rotation angle differs. Changing `phase` rotates the full rosette rigidly, while changing `petals` recomputes the spacing as ${tex`2\pi/k`}. This same local-transform reuse is a foundation of hierarchical scene graphs.
 
+## Check Your Understanding
 
+1. For points ${tex`P, Q`} and a vector ${tex`\mathbf v`}, which of ${tex`P - Q`}, ${tex`P + \mathbf v`}, and ${tex`P + Q`} have a geometric meaning, and what kind of object is each?
+2. Normalize ${tex`(3, 4)`}.
+3. Compute ${tex`\mathbf a \cdot \mathbf b`} for ${tex`\mathbf a = (2, -1)`} and ${tex`\mathbf b = (1, 2)`}. What does the result say about the two vectors?
+4. Compute the 2D cross product ${tex`\mathbf a \times \mathbf b`} for ${tex`\mathbf a = (2, 0)`} and ${tex`\mathbf b = (1, 3)`}. Is **b** clockwise or counterclockwise from **a**, and what is the area of triangle ${tex`(0, \mathbf a, \mathbf b)`}?
+5. A triangle has vertices ${tex`P_0 = (0,0,0)`}, ${tex`P_1 = (1,0,0)`}, ${tex`P_2 = (0,1,0)`}. What is ${tex`(P_1-P_0)\times(P_2-P_0)`}? What changes if the vertices are listed as ${tex`P_0, P_2, P_1`}?
+6. Why can no 2×2 matrix translate the plane?
+7. In ${tex`RS\mathbf v`}, which transformation acts on ${tex`\mathbf v`} first?
+8. Is ${tex`\begin{bmatrix}1&2\\2&4\end{bmatrix}`} invertible? What does it do to the plane?
+9. What is the inverse of a rotation by 30°, and how can you get it without inverting a matrix?
+10. What is the determinant of a reflection across the y-axis? What does a negative determinant say about a composite transformation?
+11. What are the singular values of ${tex`\begin{bmatrix}3&0\\0&-2\end{bmatrix}`}?
+12. A rosette has ${tex`k = 8`} petals. What angle separates neighboring petals?
+
+<details>
+<summary>Answers</summary>
+
+1. ${tex`P - Q`} is a vector, the displacement from ${tex`Q`} to ${tex`P`}. ${tex`P + \mathbf v`} is a point. ${tex`P + Q`} has no geometric meaning on its own.
+2. (${vec2.normalize({x: 3, y: 4}).x.toFixed(1)}, ${vec2.normalize({x: 3, y: 4}).y.toFixed(1)}), since the length is 5.
+3. ${vec2.dot({x: 2, y: -1}, {x: 1, y: 2})}, so the vectors are perpendicular.
+4. ${vec2.cross({x: 2, y: 0}, {x: 1, y: 3})}. The value is positive, so **b** is counterclockwise from **a**. The triangle's area is half of that, ${vec2.cross({x: 2, y: 0}, {x: 1, y: 3}) / 2}.
+5. (${vec3.triangleNormal([0, 0, 0], [1, 0, 0], [0, 1, 0]).join(", ")}) before normalizing. Swapping two vertices reverses the cross product, so the normal becomes (0, 0, −1). Vertex order decides which way a normal points.
+6. Every linear map fixes the origin: ${tex`M\mathbf 0 = \mathbf 0`}. A translation moves the origin, so it is not linear.
+7. ${tex`S`}. With column vectors, the matrix closest to the vector acts first.
+8. No. Its determinant is ${mat2.determinant({m00: 1, m01: 2, m10: 2, m11: 4})}, because the second row is twice the first. It collapses the whole plane onto a line, so the lost information cannot be recovered.
+9. A rotation by −30°. Rotation matrices are orthonormal, so the inverse is the transpose.
+10. ${mat2.determinant(mat2.reflectionY())}. A composite with a negative determinant reverses orientation, so counterclockwise shapes come out clockwise.
+11. ${mat2.svd({m00: 3, m01: 0, m10: 0, m11: -2}).singularValues.map((s) => +s.toFixed(6)).join(" and ")}. Singular values are never negative; the sign goes into ${tex`U`} or ${tex`V`}.
+12. ${tex`2\pi/8`}, or 45°.
+
+</details>
+
+## Common Pitfalls
+
+- **Treating points and vectors the same.** Adding two points has no
+  meaning, and in Module 03 a direction must not be translated the way a
+  position is.
+- **Normalizing a zero vector.** Dividing by a zero length produces `NaN`
+  values that spread through every later calculation.
+- **Reading the dot product as a cosine without normalizing.**
+  ${tex`\mathbf a \cdot \mathbf b = \cos\theta`} only when both vectors
+  have unit length; otherwise only the sign is directly meaningful.
+- **Swapping cross-product operands.** ${tex`\mathbf a \times \mathbf b = -(\mathbf b \times \mathbf a)`},
+  so the wrong order flips a normal or a winding test.
+- **Multiplying matrices in the wrong order.** With column vectors, the
+  rightmost matrix acts first: ${tex`RS`} scales, then rotates.
+- **Testing a determinant with `=== 0`.** Floating-point error rarely
+  produces exactly zero. Compare ${tex`|\det M|`} against a small tolerance.
+- **Using the transpose as the inverse of any matrix.** The shortcut
+  ${tex`M^{-1} = M^T`} holds only for orthonormal matrices.
+- **Mixing degrees and radians.** `Math.cos` and `Math.sin` take radians;
+  convert slider angles with ${tex`\pi/180`}.
 
 ## Summary
 
-- Points represent locations; vectors represent displacements. Their allowed operations are different.
-- Vector arithmetic includes addition, subtraction, scalar multiplication, magnitude, and normalization. Dot products express alignment and projection; 2D cross products express signed area and orientation.
-- Matrices represent linear transformations. Their multiplication order matters, and singular matrices have no inverse.
-- Orthonormal matrices preserve lengths and angles, so their inverse equals their transpose.
-- Scale, rotation, reflection, and shear are fundamental linear maps. SVD describes every matrix as orthonormal transforms around axis-aligned scaling.
+- **Points and vectors:** points are locations and vectors are
+  displacements. Point − point is a vector and point + vector is a point,
+  but point + point has no meaning.
+- **Vector arithmetic:** addition, subtraction, scaling, magnitude, and
+  normalization. The dot product measures alignment and gives
+  projections; the 2D cross product gives signed area and orientation,
+  and the 3D cross product gives triangle normals.
+- **Matrices:** a 2×2 matrix represents a linear transformation, which
+  always fixes the origin. Matrix products compose transformations, the
+  order matters, and a matrix with zero determinant has no inverse.
+- **Orthonormal matrices:** they preserve lengths and angles, so their
+  inverse is their transpose.
+- **Linear transformations:** scale, rotation, reflection, and shear are
+  the basic 2D maps. SVD writes every matrix as a rotation or reflection,
+  an axis-aligned scale, and another rotation or reflection. Repeated
+  rotation of one local shape builds a rosette.

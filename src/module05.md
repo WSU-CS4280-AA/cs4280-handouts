@@ -16,28 +16,33 @@ import {html} from "npm:htl";
 
 # Module 05 · Surface Shading and Illumination
 
-Week 4 rendered a flat-colored triangle — geometry with no sense of
-light. This week is entirely about the second question: given a shape,
-*what does it look like*? Everything below still uses exactly Week 4's
-seven-step WebGPU skeleton; only the shader content changes, growing to
-carry normals and evaluate a real illumination equation.
+Module 04 rendered a flat-colored triangle: geometry with no sense of
+light. This module is about the second question: given a shape, *what
+does it look like*?
 
-Needs **Chrome or Edge 113+**. Teaches the *techniques* behind shading;
-not a walkthrough of any graded assignment. We start, though, with one
-more pure-*geometry* example — a fractal built from nothing but
-randomness — before turning to normals and light.
+| Topic | Question it answers |
+|---|---|
+| **Light and appearance** | What inputs decide a surface's color, and how do normals transform? |
+| **Illumination models** | How do Lambert, Phong, and Blinn-Phong compute brightness? |
+| **Shading in WebGPU** | Where in the pipeline is lighting evaluated: per face, per vertex, or per fragment? |
+
+The WebGPU section reuses Module 04's seven-step skeleton; only the
+shaders change, growing to carry normals and evaluate an illumination
+equation. The page requests a GPU device at the top and needs **Chrome
+or Edge 113+**. This handout teaches the *techniques* behind the module;
+it is not a walkthrough of any graded assignment.
 
 ```js echo
 const {adapter, device} = await webgpu.requestDevice();
 ```
 
-Most WebGPU mistakes below — a bad buffer size, a bind group that
-doesn't match its pipeline's layout — don't throw a normal JavaScript
-exception at all; the call just quietly fails validation and reports it
-*asynchronously* to `device`'s own `"uncapturederror"` event, the same
-way `device.lost` reports a driver reset. Wiring that up once, here,
-means any such error surfaces as a visible message on the page instead
-of vanishing into a spot only the browser console would show:
+Most WebGPU mistakes, such as a bad buffer size or a bind group that
+does not match its pipeline's layout, do not throw a JavaScript
+exception. The call quietly fails validation and reports it
+*asynchronously* to `device`'s `"uncapturederror"` event, the same way
+`device.lost` reports a driver reset. Listening for that event once, here,
+makes any such error appear on the page instead of only in the browser
+console:
 
 ```js echo
 const deviceErrorLog = document.createElement("pre");
@@ -49,23 +54,224 @@ device.addEventListener("uncapturederror", (event) => {
 deviceErrorLog
 ```
 
-## Warm-Up: A 2D Sierpinski Gasket (Still No Lighting)
+## Light and Appearance
 
-Week 4 built exactly one shape: a hand-placed triangle. Before this
-week piles normals and illumination onto that skeleton, it's worth
-reusing the *exact same* seven-step recipe — device, canvas, buffer,
-shader, pipeline, pass, submit — on a shape nobody placed by hand at
-all. The **chaos game** builds the Sierpinski gasket from three fixed
+### Geometry vs. appearance
+
+**Geometry** (vertex positions and connectivity) answers "what is the
+shape?" **Appearance** answers "what does it look like under light?",
+combining geometry (normals), light, material, and viewer position.
+**Local illumination** (this module) computes a point's color from direct
+light only; **global illumination** (ray tracing, later) accounts for
+light bouncing between surfaces. Classical real-time graphics patches the
+missing indirect term with a constant **ambient** fill.
+
+| Light type | Defined by | Behavior |
+|---|---|---|
+| Ambient | Nothing | Uniform fill, no direction |
+| Point | Position | Radiates in all directions, attenuates with distance |
+| Directional | Direction only | Parallel rays (sunlight) |
+| Spotlight | Position, direction, cone | Falls off near the cone edge |
+| Area | Extended shape | Soft shadows; needs Monte Carlo sampling (later) |
+
+For a point light, direction must be recomputed at every surface point:
+
+${tex.block`\mathbf{L} = \widehat{\mathbf{p}_{light}-\mathbf{p}}`}
+
+### Normals, and why transforming them is not free
+
+A **surface normal** is a unit vector perpendicular to the surface. It
+is the most important geometric input to lighting, since every
+illumination equation depends on the angle between normal and light.
+Positions transform as ${tex`\mathbf p' = M\mathbf p`}, and it is
+tempting to transform normals the same way, but that only works for
+rotation and *uniform* scaling. Under **non-uniform** scaling, applying
+**M** directly can leave a normal no longer perpendicular to the
+transformed surface. The fix is the **inverse-transpose**:
+
+${tex.block`\mathbf{n}' = M^{-T}\mathbf{n}\ \text{(then re-normalize)}`}
+
+Below, a tilted edge (gray) is scaled non-uniformly. The naive transform
+${tex`M\mathbf n`} (orange) and the correct ${tex`M^{-T}\mathbf n`} (green)
+start identical at `sx = sy` but diverge the moment scaling turns non-uniform.
+
+```js echo
+const normalForm = view(Inputs.form({
+  sx: Inputs.range([0.3, 2.5], {value: 1.8, step: 0.05, label: "scale sx"}),
+  sy: Inputs.range([0.3, 2.5], {value: 0.6, step: 0.05, label: "scale sy"})
+}));
+```
+
+```js echo
+const tiltAngle = (35 * Math.PI) / 180;
+const edgeDir = {x: Math.cos(tiltAngle), y: Math.sin(tiltAngle)};
+const normalDir = {x: -Math.sin(tiltAngle), y: Math.cos(tiltAngle)};
+const M2 = mat2.scaling(normalForm.sx, normalForm.sy);
+const edgeT = mat2.apply(M2, edgeDir);
+const naiveNormalT = vec2.normalize(mat2.apply(M2, normalDir));
+const correctNormalT = vec2.normalize(mat2.apply(mat2.transpose(mat2.invert(M2)), normalDir));
+const dotNaive = vec2.dot(vec2.normalize(edgeT), naiveNormalT);
+const dotCorrect = vec2.dot(vec2.normalize(edgeT), correctNormalT);
+```
+
+```js echo
+(() => {
+  const scene = plane({domain: 2.2});
+  const edgeExtent = vec2.scale(vec2.normalize(edgeT), 2);
+  scene.svg.append("line")
+    .attr("x1", scene.x(-edgeExtent.x)).attr("y1", scene.y(-edgeExtent.y))
+    .attr("x2", scene.x(edgeExtent.x)).attr("y2", scene.y(edgeExtent.y))
+    .attr("stroke", "gray").attr("stroke-width", 3);
+  drawArrow(scene, {x: 0, y: 0}, vec2.scale(naiveNormalT, 1.3), {color: "orangered", label: "naive: M·n"});
+  drawArrow(scene, {x: 0, y: 0}, vec2.scale(correctNormalT, 1.3), {color: "seagreen", label: "correct: M⁻ᵀ·n"});
+  return scene.svg.node();
+})()
+```
+
+`edge · naive normal` = ${dotNaive.toFixed(3)}, but a true normal needs
+0. `edge · correct normal` = ${dotCorrect.toFixed(3)}, which stays zero to
+floating-point precision *regardless* of how non-uniform the scale gets.
+Set `sx = sy` and the orange arrow snaps back onto the green one. The
+naive shortcut looks correct under uniform scaling, which is why this bug
+can hide for a long time in a real project.
+
+## Illumination Models
+
+### Lambert's cosine law
+
+**Diffuse** reflection scatters incoming light equally in every outgoing
+direction, so brightness depends only on how much energy arrives, which
+depends on the angle of incidence:
+
+${tex.block`I_d = k_d\,\max(\mathbf{N}\cdot\mathbf{L},\ 0)\,I_L`}
+
+The `max(·, 0)` clamp matters: a negative dot product means the light
+is behind the surface, contributing zero, never negative, light. Drag
+**N** or **L** below and watch `I_d` track cos θ directly.
+
+```js echo
+const lambertVectorsWidget = dragVectors(
+  {N: {x: 0, y: 2}, L: {x: 1.4, y: 1.4}},
+  {colors: ["steelblue", "#ffd34d"], domain: 3}
+);
+const lambertVectors = view(lambertVectorsWidget);
+```
+
+```js echo
+const Nvec = vec2.normalize(lambertVectors.N);
+const Lvec = vec2.normalize(lambertVectors.L);
+const NdotL = Math.max(vec2.dot(Nvec, Lvec), 0);
+const kd = 0.8;
+```
+
+```js echo
+lambertVectorsWidget.redecorate((scene) => {
+  scene.svg.append("line")
+    .attr("x1", scene.x(-Nvec.y * 2)).attr("y1", scene.y(Nvec.x * 2))
+    .attr("x2", scene.x(Nvec.y * 2)).attr("y2", scene.y(-Nvec.x * 2))
+    .attr("stroke", "gray").attr("stroke-dasharray", "4,3"); // the surface N is perpendicular to
+});
+```
+
+**N** · **L** = ${NdotL.toFixed(3)}, so with `k_d` = ${kd}:
+`I_d` = ${kd} × ${NdotL.toFixed(3)} = **${(kd * NdotL).toFixed(3)}**.
+Drag **L** past grazing, behind the (dashed) surface line, and `I_d`
+clamps to exactly 0 rather than going negative.
+
+A quick check against a worked example with N=(0,0,1),
+L=(0.577,0.577,0.577), I_L=1.0, and k_d=0.8:
+
+```js echo
+(() => {
+  const N3 = {x: 0, y: 0, z: 1};
+  const L3 = {x: 0.577, y: 0.577, z: 0.577};
+  const dot3 = N3.x * L3.x + N3.y * L3.y + N3.z * L3.z;
+  const Id = 0.8 * Math.max(dot3, 0) * 1.0;
+  return `N·L = ${dot3.toFixed(3)}, I_d = ${Id.toFixed(3)} (expected: 0.462)`;
+})()
+```
+
+### Phong and Blinn-Phong
+
+Phong (1975) sums three independently-motivated terms:
+
+${tex.block`I = \underbrace{k_aI_a}_{\text{ambient}} + \underbrace{k_d\max(\mathbf N\cdot\mathbf L,0)I_L}_{\text{diffuse}} + \underbrace{k_s\max(\mathbf R\cdot\mathbf V,0)^{n}I_L}_{\text{specular}}`}
+
+**Ambient** is a constant fill, blind to orientation: a crude stand-in
+for missing indirect light. **Specular** depends on the *viewer*, through
+the mirror-reflection vector ${tex`\mathbf R = 2(\mathbf N\cdot\mathbf
+L)\mathbf N - \mathbf L`}. Here is the implementation checked against a
+worked example with N=(0,0,1), L=(0.5,0,0.866), V=(0,0,1), k_a=0.1,
+k_d=0.7, k_s=0.5, and n=8:
+
+```js echo
+(() => {
+  const N = {x: 0, y: 0, z: 1};
+  const L = {x: 0.5, y: 0, z: 0.866};
+  const V = {x: 0, y: 0, z: 1};
+  const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+  const NdotL2 = Math.max(dot(N, L), 0);
+  const R = {x: 2 * NdotL2 * N.x - L.x, y: 2 * NdotL2 * N.y - L.y, z: 2 * NdotL2 * N.z - L.z};
+  const ambient = 0.1;
+  const diffuse = 0.7 * NdotL2;
+  const specular = 0.5 * Math.pow(Math.max(dot(R, V), 0), 8);
+  const total = ambient + diffuse + specular;
+  return html`<pre>ambient  = ${ambient.toFixed(3)}
+diffuse  = ${diffuse.toFixed(3)}
+R        = (${R.x.toFixed(3)}, ${R.y.toFixed(3)}, ${R.z.toFixed(3)})
+specular = ${specular.toFixed(3)}
+total    = ${total.toFixed(3)}  (expected: 0.864)</pre>`;
+})()
+```
+
+**Blinn-Phong** (1977) replaces **R** with the **half-vector**
+${tex`\mathbf H = \widehat{\mathbf L+\mathbf V}`} and
+${tex`I_s = k_s\max(\mathbf N\cdot\mathbf H,0)^{n}I_L`}. It is cheaper,
+with no reflection vector to build, and better behaved at grazing angles.
+The two exponents are not interchangeable. For the same geometry and
+shininess `n`:
+
+```js echo
+(() => {
+  const N = {x: 0, y: 0, z: 1};
+  const L = {x: 0.5, y: 0, z: 0.866};
+  const V = {x: 0, y: 0, z: 1};
+  const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+  const NdotL2 = Math.max(dot(N, L), 0);
+  const R = {x: 2 * NdotL2 * N.x - L.x, y: 2 * NdotL2 * N.y - L.y, z: 2 * NdotL2 * N.z - L.z};
+  const Hlen = Math.hypot(L.x + V.x, L.y + V.y, L.z + V.z);
+  const H = {x: (L.x + V.x) / Hlen, y: (L.y + V.y) / Hlen, z: (L.z + V.z) / Hlen};
+  const rows = [8, 32].map((n) => {
+    const phong = Math.pow(Math.max(dot(R, V), 0), n);
+    const blinn = Math.pow(Math.max(dot(N, H), 0), n);
+    return `n=${n.toString().padEnd(3)} Phong (R·V)^n = ${phong.toFixed(3)}   Blinn-Phong (N·H)^n = ${blinn.toFixed(3)}`;
+  });
+  return html`<pre>${rows.join("\n")}</pre>`;
+})()
+```
+
+Blinn-Phong reads noticeably brighter at both exponents, so engines
+typically use a higher `n` for Blinn-Phong to match the visual size of a
+Phong highlight.
+
+## Shading in WebGPU
+
+### Warm-up: a Sierpinski gasket (still no lighting)
+
+Module 04 built one shape: a hand-placed triangle. Before adding normals
+and lighting to that skeleton, we reuse the same seven-step recipe
+(device, canvas, buffer, shader, pipeline, pass, submit) on a shape
+nobody placed by hand. The **chaos game** builds the Sierpinski gasket from three fixed
 corners and pure randomness: start anywhere, then repeatedly jump
 halfway toward a *randomly chosen* corner, plotting each new point.
 
 ${tex.block`\mathbf p_{i+1} = \tfrac12\left(\mathbf p_i + \mathbf c_{\text{random}}\right)`}
 
-No triangle is ever subdivided or tested "is this point inside the
-fractal" — the fractal is an emergent byproduct of the recursion above,
-rendered as thousands of single-pixel points (`topology: "point-list"`,
-new to this page — Week 4 only ever used `"triangle-list"`). Its vertex
-shader is even simpler than Week 4's: positions are authored directly
+No triangle is ever subdivided, and no point is tested for being inside
+the fractal. The fractal emerges from the recursion above and is drawn
+as thousands of single-pixel points with `topology: "point-list"`
+(Module 04 used only `"triangle-list"`). The vertex shader is even
+simpler than Module 04's: positions are authored directly
 in NDC and every point gets the same fixed fragment color, so there is
 no per-vertex color attribute at all.
 
@@ -164,213 +370,16 @@ gasketVertexBuffer.unmap();
 })()
 ```
 
-Drag `iterations` from its low end up toward 30,000: a few hundred
-points look like scattered noise, but past a few thousand the triangle
-self-organizes into the gasket with no code change at all — the shape
-was always latent in the recursion, not drawn. Every point above is
-flat-colored and shaded identically; nothing here has a notion of a
-surface, a normal, or a light. That's precisely the boundary the next
-section names.
+Drag `iterations` from its low end toward 30,000. A few hundred points
+look like scattered noise, but past a few thousand the gasket appears
+with no code change; the shape was always latent in the recursion. Every
+point is flat-colored and shaded identically. Nothing here has a surface,
+a normal, or a light, which is the gap the rest of this section fills.
 
-## Geometry vs. Appearance
-
-**Geometry** — vertex positions, connectivity — answers "what is the
-shape?" **Appearance** answers "what does it look like under light?",
-combining geometry (normals), light, material, and viewer position.
-**Local illumination** (this week) computes a point's color from direct
-light only; **global illumination** (ray tracing, later) accounts for
-light bouncing between surfaces. Classical real-time graphics patches the
-missing indirect term with a constant **ambient** fill.
-
-| Light type | Defined by | Behavior |
-|---|---|---|
-| Ambient | Nothing | Uniform fill, no direction |
-| Point | Position | Radiates in all directions, attenuates with distance |
-| Directional | Direction only | Parallel rays (sunlight) |
-| Spotlight | Position, direction, cone | Falls off near the cone edge |
-| Area | Extended shape | Soft shadows; needs Monte Carlo sampling (later) |
-
-For a point light, direction must be recomputed at every surface point:
-
-${tex.block`\mathbf{L} = \widehat{\mathbf{p}_{light}-\mathbf{p}}`}
-
-## Normals, and Why Transforming Them Is Not Free
-
-A **surface normal** is a unit vector perpendicular to the surface — the
-single most important geometric input to lighting, since every
-illumination equation depends on the angle between normal and light.
-Positions transform as ${tex`\mathbf p' = M\mathbf p`}; it's tempting to
-transform normals the same way, but that only works for rotation and
-*uniform* scaling. Under **non-uniform** scaling, applying **M** directly
-can leave a normal no longer perpendicular to the transformed surface —
-the fix is the **inverse-transpose**:
-
-${tex.block`\mathbf{n}' = M^{-T}\mathbf{n}\ \text{(then re-normalize)}`}
-
-Below, a tilted edge (gray) is scaled non-uniformly. The naive transform
-${tex`M\mathbf n`} (orange) and the correct ${tex`M^{-T}\mathbf n`} (green)
-start identical at `sx = sy` but diverge the moment scaling turns non-uniform.
-
-```js echo
-const normalForm = view(Inputs.form({
-  sx: Inputs.range([0.3, 2.5], {value: 1.8, step: 0.05, label: "scale sx"}),
-  sy: Inputs.range([0.3, 2.5], {value: 0.6, step: 0.05, label: "scale sy"})
-}));
-```
-
-```js echo
-const tiltAngle = (35 * Math.PI) / 180;
-const edgeDir = {x: Math.cos(tiltAngle), y: Math.sin(tiltAngle)};
-const normalDir = {x: -Math.sin(tiltAngle), y: Math.cos(tiltAngle)};
-const M2 = mat2.scaling(normalForm.sx, normalForm.sy);
-const edgeT = mat2.apply(M2, edgeDir);
-const naiveNormalT = vec2.normalize(mat2.apply(M2, normalDir));
-const correctNormalT = vec2.normalize(mat2.apply(mat2.transpose(mat2.invert(M2)), normalDir));
-const dotNaive = vec2.dot(vec2.normalize(edgeT), naiveNormalT);
-const dotCorrect = vec2.dot(vec2.normalize(edgeT), correctNormalT);
-```
-
-```js echo
-(() => {
-  const scene = plane({domain: 2.2});
-  const edgeExtent = vec2.scale(vec2.normalize(edgeT), 2);
-  scene.svg.append("line")
-    .attr("x1", scene.x(-edgeExtent.x)).attr("y1", scene.y(-edgeExtent.y))
-    .attr("x2", scene.x(edgeExtent.x)).attr("y2", scene.y(edgeExtent.y))
-    .attr("stroke", "gray").attr("stroke-width", 3);
-  drawArrow(scene, {x: 0, y: 0}, vec2.scale(naiveNormalT, 1.3), {color: "orangered", label: "naive: M·n"});
-  drawArrow(scene, {x: 0, y: 0}, vec2.scale(correctNormalT, 1.3), {color: "seagreen", label: "correct: M⁻ᵀ·n"});
-  return scene.svg.node();
-})()
-```
-
-`edge · naive normal` = ${dotNaive.toFixed(3)} (a true normal needs this
-at 0) — `edge · correct normal` = ${dotCorrect.toFixed(3)}, always zero
-to floating-point precision, *regardless* of how non-uniform the scale
-gets. Set `sx = sy` and watch the orange arrow snap back onto the green
-one — the naive shortcut only ever looks correct under uniform scaling,
-which is exactly why this bug hides for so long in a real project.
-
-## Lambert's Cosine Law
-
-**Diffuse** reflection scatters incoming light equally in every outgoing
-direction — brightness depends only on how much energy arrives, which
-depends on the angle of incidence:
-
-${tex.block`I_d = k_d\,\max(\mathbf{N}\cdot\mathbf{L},\ 0)\,I_L`}
-
-The `max(·, 0)` clamp matters: a negative dot product means the light
-is behind the surface, contributing zero, never negative, light. Drag
-**N** or **L** below and watch `I_d` track cos θ directly.
-
-```js echo
-const lambertVectorsWidget = dragVectors(
-  {N: {x: 0, y: 2}, L: {x: 1.4, y: 1.4}},
-  {colors: ["steelblue", "#ffd34d"], domain: 3}
-);
-const lambertVectors = view(lambertVectorsWidget);
-```
-
-```js echo
-const Nvec = vec2.normalize(lambertVectors.N);
-const Lvec = vec2.normalize(lambertVectors.L);
-const NdotL = Math.max(vec2.dot(Nvec, Lvec), 0);
-const kd = 0.8;
-```
-
-```js echo
-lambertVectorsWidget.redecorate((scene) => {
-  scene.svg.append("line")
-    .attr("x1", scene.x(-Nvec.y * 2)).attr("y1", scene.y(Nvec.x * 2))
-    .attr("x2", scene.x(Nvec.y * 2)).attr("y2", scene.y(-Nvec.x * 2))
-    .attr("stroke", "gray").attr("stroke-dasharray", "4,3"); // the surface N is perpendicular to
-});
-```
-
-**N** · **L** = ${NdotL.toFixed(3)}, so with `k_d` = ${kd}:
-`I_d` = ${kd} × ${NdotL.toFixed(3)} = **${(kd * NdotL).toFixed(3)}**.
-Drag **L** past grazing, behind the (dashed) surface line, and `I_d`
-clamps to exactly 0 rather than going negative.
-
-A quick check against the lecture's own worked numbers — N=(0,0,1),
-L=(0.577,0.577,0.577), I_L=1.0, k_d=0.8:
-
-```js echo
-(() => {
-  const N3 = {x: 0, y: 0, z: 1};
-  const L3 = {x: 0.577, y: 0.577, z: 0.577};
-  const dot3 = N3.x * L3.x + N3.y * L3.y + N3.z * L3.z;
-  const Id = 0.8 * Math.max(dot3, 0) * 1.0;
-  return `N·L = ${dot3.toFixed(3)}, I_d = ${Id.toFixed(3)} (lecture: 0.462)`;
-})()
-```
-
-## Phong and Blinn-Phong
-
-Phong (1973) sums three independently-motivated terms:
-
-${tex.block`I = \underbrace{k_aI_a}_{\text{ambient}} + \underbrace{k_d\max(\mathbf N\cdot\mathbf L,0)I_L}_{\text{diffuse}} + \underbrace{k_s\max(\mathbf R\cdot\mathbf V,0)^{n}I_L}_{\text{specular}}`}
-
-**Ambient** is a constant fill, blind to orientation — a crude stand-in
-for missing indirect light. **Specular** depends on the *viewer*, via the
-mirror-reflection vector ${tex`\mathbf R = 2(\mathbf N\cdot\mathbf
-L)\mathbf N - \mathbf L`}. Verifying the implementation against the
-lecture's own worked example — N=(0,0,1), L=(0.5,0,0.866), V=(0,0,1),
-k_a=0.1, k_d=0.7, k_s=0.5, n=8:
-
-```js echo
-(() => {
-  const N = {x: 0, y: 0, z: 1};
-  const L = {x: 0.5, y: 0, z: 0.866};
-  const V = {x: 0, y: 0, z: 1};
-  const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
-  const NdotL2 = Math.max(dot(N, L), 0);
-  const R = {x: 2 * NdotL2 * N.x - L.x, y: 2 * NdotL2 * N.y - L.y, z: 2 * NdotL2 * N.z - L.z};
-  const ambient = 0.1;
-  const diffuse = 0.7 * NdotL2;
-  const specular = 0.5 * Math.pow(Math.max(dot(R, V), 0), 8);
-  const total = ambient + diffuse + specular;
-  return html`<pre>ambient  = ${ambient.toFixed(3)}
-diffuse  = ${diffuse.toFixed(3)}
-R        = (${R.x.toFixed(3)}, ${R.y.toFixed(3)}, ${R.z.toFixed(3)})
-specular = ${specular.toFixed(3)}
-total    = ${total.toFixed(3)}  (lecture: 0.864)</pre>`;
-})()
-```
-
-**Blinn-Phong** (1977) replaces **R** with the **half-vector**
-${tex`\mathbf H = \widehat{\mathbf L+\mathbf V}`} and
-${tex`I_s = k_s\max(\mathbf N\cdot\mathbf H,0)^{n}I_L`} — cheaper (no
-reflection vector to build) and better-behaved at grazing angles. The two
-exponents aren't interchangeable — for the same geometry and shininess `n`:
-
-```js echo
-(() => {
-  const N = {x: 0, y: 0, z: 1};
-  const L = {x: 0.5, y: 0, z: 0.866};
-  const V = {x: 0, y: 0, z: 1};
-  const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
-  const NdotL2 = Math.max(dot(N, L), 0);
-  const R = {x: 2 * NdotL2 * N.x - L.x, y: 2 * NdotL2 * N.y - L.y, z: 2 * NdotL2 * N.z - L.z};
-  const Hlen = Math.hypot(L.x + V.x, L.y + V.y, L.z + V.z);
-  const H = {x: (L.x + V.x) / Hlen, y: (L.y + V.y) / Hlen, z: (L.z + V.z) / Hlen};
-  const rows = [8, 32].map((n) => {
-    const phong = Math.pow(Math.max(dot(R, V), 0), n);
-    const blinn = Math.pow(Math.max(dot(N, H), 0), n);
-    return `n=${n.toString().padEnd(3)} Phong (R·V)^n = ${phong.toFixed(3)}   Blinn-Phong (N·H)^n = ${blinn.toFixed(3)}`;
-  });
-  return html`<pre>${rows.join("\n")}</pre>`;
-})()
-```
-
-Blinn-Phong reads noticeably brighter at both exponents — matching the
-lecture's own table — which is why engines typically use a higher `n` for
-Blinn-Phong to match a Phong highlight's visual size.
-
-## From Theory to Code: Flat, Gouraud, and Phong Shading
+### Flat, Gouraud, and Phong shading
 
 The three shading algorithms differ only in **when** lighting is
-evaluated — the same Blinn-Phong equation above, pushed later and later
+evaluated. Each uses the same Blinn-Phong equation, pushed later and later
 into the pipeline:
 
 | Algorithm | Normals | Lighting evaluated | Highlight |
@@ -380,9 +389,8 @@ into the pipeline:
 | Phong | Per vertex, interpolated | **Per fragment** | Accurate |
 
 All three render the *same* sphere below, driven by the *same* light and
-material controls — only the pipeline differs. `device` is the exact
-same object requested once, back at the very top of the page, for the
-Sierpinski gasket.
+material controls; only the pipeline differs. `device` is the same object
+requested once at the top of the page.
 
 ```js echo
 const sphereSmooth = geometry.createSphere(24, 32);
@@ -409,8 +417,9 @@ const flatVertexBuffer = makeVertexBuffer(flatVertexData);
 const flatVertexCount = sphereFlat.positions.length / 3;
 ```
 
-Fixed camera and model matrix — nothing here needs the general
-inverse-transpose from §2, since this sphere never scales non-uniformly:
+The camera and model matrix are fixed. Nothing here needs the general
+inverse-transpose from the normals section, since this sphere never
+scales non-uniformly:
 
 ```js echo
 const sphereView = mat4.lookAt([2.4, 1.7, 3.2], [0, 0, 0], [0, 1, 0]);
@@ -432,9 +441,9 @@ device.queue.writeBuffer(cameraBuffer, 0, new Float32Array([2.4, 1.7, 3.2, 0]));
 ```
 
 Two shaders: one evaluates lighting **per vertex** and outputs a color
-(shared by Flat and Gouraud — they differ only in *which* geometry feeds
-it, face-normal or vertex-normal); the other evaluates it **per
-fragment** (Phong shading):
+and is shared by Flat and Gouraud, which differ only in *which* geometry
+feeds it (face normals or vertex normals). The other evaluates lighting
+**per fragment** (Phong shading):
 
 ```js echo
 const vertexLitSource = `
@@ -503,8 +512,8 @@ fn vs_main(@location(0) inPos: vec3<f32>, @location(1) inNormal: vec3<f32>) -> V
 fn fs_main(@location(0) worldPos: vec3<f32>, @location(1) worldNormal: vec3<f32>, @builtin(front_facing) isFront: bool) -> @location(0) vec4<f32> {
   // Flip the normal on the back side of a fragment. A closed solid like
   // the sphere never shows its back (cullMode "back" removes it before
-  // this shader even runs), so isFront is always true there — this only
-  // does something for a genuinely two-sided surface like a petal.
+  // this shader even runs), so isFront is always true there. This only
+  // matters for a genuinely two-sided surface, such as an open sheet.
   let N = select(-normalize(worldNormal), normalize(worldNormal), isFront);
   let L = normalize(light.position.xyz - worldPos);
   let V = normalize(cameraPosition.xyz - worldPos);
@@ -656,51 +665,83 @@ drawSphere(gouraudTarget, vertexLitPipeline, vertexLitBindGroup, smoothVertexBuf
 drawSphere(phongTarget, phongPipeline, phongBindGroup, smoothVertexBuffer, smoothIndexBuffer, sphereSmooth.indices.length);
 ```
 
-Flat facets into visible triangles no matter how fine the mesh gets near
-the silhouette; Gouraud smooths the *body* of the sphere but the
-specular highlight is unreliable — push `shininess` up and watch it
-flicker or vanish between vertices instead of forming a clean spot;
-Phong alone holds a stable highlight, because it's the only one actually
-evaluating the equation at every pixel rather than interpolating an
-already-computed color.
+Flat shading shows every triangle as a visible facet.
+Gouraud smooths the *body* of the sphere, but its specular highlight is
+unreliable: push `shininess` up and the highlight flickers or vanishes
+between vertices instead of forming a clean spot. Only Phong shading
+holds a stable highlight, because it evaluates the equation at every
+pixel instead of interpolating an already-computed color.
+
+## Check Your Understanding
+
+1. In the chaos game, the current point is ${tex`(0, 0)`} and the randomly chosen corner is ${tex`(0, 0.85)`}. What is the next point?
+2. What does local illumination leave out, and what does the ambient term stand in for?
+3. Why must the light direction ${tex`\mathbf L`} be recomputed at every surface point for a point light, but not for a directional light?
+4. A surface has tangent ${tex`(1, -1)`} and normal ${tex`(1, 1)/\sqrt 2`}. After scaling by ${tex`M = \operatorname{diag}(2, 1)`}, what is the correct unit normal?
+5. Why does a pure rotation never need the inverse-transpose?
+6. With ${tex`k_d = 0.8`} and ${tex`I_L = 1`}, what is the diffuse intensity when the angle between **N** and **L** is 60°? When it is 120°?
+7. For ${tex`\mathbf N = (0, 0, 1)`} and ${tex`\mathbf L = (0.6, 0, 0.8)`}, what is the reflection vector ${tex`\mathbf R`}?
+8. With the same **N** and **L** and ${tex`\mathbf V = (0, 0, 1)`}, what is the half-vector ${tex`\mathbf H`} and ${tex`\mathbf N\cdot\mathbf H`}?
+9. Why does a Blinn-Phong highlight need a larger exponent than Phong to look the same size?
+10. Why can one vertex-lit shader serve both Flat and Gouraud shading?
+11. Why does Gouraud shading lose or smear a sharp highlight that Phong shading keeps?
+12. Why do both shaders set the specular term to 0 when ${tex`\mathbf N\cdot\mathbf L \le 0`}?
+
+<details>
+<summary>Answers</summary>
+
+1. ${tex`\tfrac12\big((0, 0) + (0, 0.85)\big) = (0, 0.425)`}.
+2. Light that bounces between surfaces (indirect light). The ambient term is a constant that roughly patches in that missing light.
+3. A point light sits at a position, so the direction to it changes from point to point. A directional light has parallel rays, so ${tex`\mathbf L`} is the same everywhere.
+4. ${tex`M^{-T}\mathbf n \propto (0.5, 1)`}, which normalizes to (${vec2.normalize({x: 0.5, y: 1}).x.toFixed(3)}, ${vec2.normalize({x: 0.5, y: 1}).y.toFixed(3)}). Check: the scaled tangent is ${tex`(2, -1)`}, and ${tex`(2, -1)\cdot(0.5, 1) = 0`}.
+5. A rotation is orthonormal, so ${tex`R^{-T} = R`}. Transforming the normal by ${tex`R`} directly already gives the right answer.
+6. ${tex`0.8\cos 60^\circ`} = ${(0.8 * Math.cos(Math.PI / 3)).toFixed(2)}. At 120° the dot product is negative, so the clamp gives 0.
+7. ${tex`\mathbf R = 2(0.8)(0,0,1) - (0.6, 0, 0.8) = (-0.6, 0, 0.8)`}.
+8. ${tex`\mathbf L + \mathbf V = (0.6, 0, 1.8)`}, so ${tex`\mathbf H`} = (${(0.6 / Math.hypot(0.6, 1.8)).toFixed(3)}, 0, ${(1.8 / Math.hypot(0.6, 1.8)).toFixed(3)}) and ${tex`\mathbf N\cdot\mathbf H`} = ${(1.8 / Math.hypot(0.6, 1.8)).toFixed(3)}.
+9. The angle between **N** and **H** is about half the angle between **R** and **V**, so ${tex`\mathbf N\cdot\mathbf H`} stays larger and falls off more slowly. A larger exponent tightens the highlight back to the same size.
+10. Both compute lighting per vertex and interpolate the color. Flat shading feeds the shader one face normal per triangle, so all three vertices get the same color; Gouraud feeds smooth per-vertex normals.
+11. Gouraud computes color only at the vertices. A highlight smaller than a triangle falls between vertices and is either missed or spread across the whole triangle. Phong shading evaluates the equation at every fragment.
+12. The light is behind the surface. Without the check, a viewer-facing **H** or **R** could still produce a highlight on the unlit side.
+
+</details>
 
 ## Common Pitfalls
 
-- **Forgetting to normalize** — interpolated normals and vectors like
-  **H** aren't guaranteed unit length after interpolation.
-- **Mixing coordinate spaces** — normal, light, and view directions must
+- **Forgetting to normalize.** Interpolated normals and vectors such as
+  **H** are not unit length after interpolation.
+- **Mixing coordinate spaces.** Normal, light, and view directions must
   all be expressed in the same space.
-- **Using M instead of M⁻ᵀ** for normals — hides under uniform
-  scaling (§2), breaks under non-uniform scaling.
-- **Culling a surface that has no "back"** — `cullMode: "back"` is
-  correct for a closed solid like the sphere, but an open, zero-thickness
-  sheet like a petal has geometry on only one side; cull it and the
-  missing side looks transparent from behind, not just unlit.
-- **Confusing shading algorithms with illumination models** — *where*
-  lighting is evaluated (Flat/Gouraud/Phong shading) is independent of
-  *how* it's computed (Lambertian/Phong/Blinn-Phong illumination).
-- **Treating ambient as physically meaningful** — it's a visual patch for
+- **Using M instead of M⁻ᵀ for normals.** The mistake hides under uniform
+  scaling and breaks under non-uniform scaling.
+- **Lighting the back of a surface.** Clamp ${tex`\mathbf N\cdot\mathbf L`}
+  at 0 and drop the specular term when the light is behind the surface.
+- **Culling a surface that has no "back."** `cullMode: "back"` is correct
+  for a closed solid like the sphere, but an open, zero-thickness sheet
+  has geometry on only one side. Cull it and the sheet disappears when
+  seen from behind; use `cullMode: "none"` and flip the normal with
+  `front_facing`.
+- **Confusing shading algorithms with illumination models.** *Where*
+  lighting is evaluated (Flat, Gouraud, or Phong shading) is independent
+  of *how* it is computed (Lambertian, Phong, or Blinn-Phong
+  illumination).
+- **Treating ambient as physically meaningful.** It is a visual patch for
   missing global illumination, not a simulation.
 
 ## Summary
 
-- A **Sierpinski gasket**, built from nothing but the chaos game and
-  drawn as unlit points, showed that geometry and appearance really are
-  separable questions — before either normals or a light entered the
-  page.
-- **Local** illumination models a point from direct light only;
-  **ambient** is a crude patch for the missing indirect term.
-- Normals need the **inverse-transpose**, not the model matrix directly,
-  whenever scaling is non-uniform — but a pure rotation, being
-  orthonormal, never needs it.
-- **Lambertian diffuse**, **Phong**, and **Blinn-Phong** — three
-  increasingly refined local illumination models, verified here against
-  the lecture's own worked numbers.
-- **Flat, Gouraud, and Phong shading** differ only in *when* lighting is
-  evaluated — per polygon, per vertex, or per fragment — rendered here as
-  three real WebGPU pipelines sharing one light and one material.
-- A **3D rosette** — Module 01's rotate-and-repeat petal, rebuilt as a
-  lofted surface with analytic normals — closed the loop, reusing the
-  sphere's own Blinn-Phong shader on a hand-built mesh. A one-sided
-  sheet needs `cullMode: "none"` and a `front_facing`-aware normal flip,
-  unlike the closed sphere.
+- **Light and appearance:** geometry gives the shape; appearance combines
+  normals, lights, material, and viewer position. Local illumination
+  uses direct light only, and **ambient** is a crude patch for the
+  missing indirect light.
+- **Normals:** under non-uniform scaling, normals need the
+  **inverse-transpose** of the model matrix, then renormalization. A pure
+  rotation is orthonormal and never needs it.
+- **Illumination models:** **Lambertian** diffuse follows
+  ${tex`\max(\mathbf N\cdot\mathbf L, 0)`}. **Phong** adds a specular
+  term from ${tex`\mathbf R\cdot\mathbf V`}, and **Blinn-Phong** uses
+  the cheaper half-vector term ${tex`\mathbf N\cdot\mathbf H`}.
+- **Shading in WebGPU:** the chaos-game gasket reused Module 04's
+  skeleton with a point list. **Flat, Gouraud, and Phong shading** differ
+  only in *when* lighting is evaluated (per polygon, per vertex, or per
+  fragment), rendered here as WebGPU pipelines sharing one light and one
+  material.

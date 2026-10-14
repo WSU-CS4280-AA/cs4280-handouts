@@ -12,15 +12,15 @@ import {html} from "npm:htl";
 
 # Module 06 · Signal Processing
 
-Module 02 ended with a preview: decimate a fine checkerboard and false
-patterns appear that were never in the original. This module explains
-why that happens and how to prevent it. We sample continuous functions,
+Decimate a fine checkerboard and false patterns appear that were never
+in the original. This module explains why that happens and how to
+prevent it. We sample continuous functions,
 reconstruct them, filter them with **convolution**, and use the
 **Fourier transform** to explain why some filters work better than
 others.
 
 Every example is plain JavaScript on arrays, so no GPU is needed. Each
-formula from the slides becomes a function you can call, and each
+formula becomes a function you can call, and each
 figure becomes a plot you can change with a slider. This handout teaches
 the *techniques* behind signal processing; it is not a walkthrough of any
 graded assignment.
@@ -91,7 +91,7 @@ signal is **${sineForm.f < sineForm.fs / 2 ? "safely sampled: the dashed curve l
 
 ### Hearing an alias
 
-The slides' audio example is a 10 kHz bell sampled at 8 kHz. The code
+The classic audio example is a 10 kHz bell sampled at 8 kHz. The code
 below builds exactly those samples and plays them. Your browser then
 resamples the buffer to your speaker's rate using a good reconstruction
 filter, so you hear only the frequency that the samples actually
@@ -153,8 +153,8 @@ ${tex.block`(a \star b)[i] = \sum_j a[j]\, b[i-j]`}
 
 Below, a sequence is any JavaScript function of an integer index, so it
 can be infinitely long. A filter with finite support stores its
-${tex`2r+1`} weights ${tex`b[-r..r]`}. `convolveAt` is the slides'
-`convolve(a, b, i)` pseudocode:
+${tex`2r+1`} weights ${tex`b[-r..r]`}. `convolveAt` implements the
+standard `convolve(a, b, i)` pseudocode:
 
 ```js echo
 function discreteFilter(weights) {
@@ -175,7 +175,7 @@ const step = (i) => (i >= 0 ? 1 : 0);
 ```
 
 **Box ⋆ step.** Convolving the unit step with the 5-point box
-(${tex`r=2`}) gives the ramp from the slides,
+(${tex`r=2`}) gives the ramp
 ${tex`\tfrac15[\dots,0,0,1,2,3,4,5,5,\dots]`}:
 
 ```js echo
@@ -308,8 +308,8 @@ For continuous functions, the sum becomes an integral:
 
 ${tex.block`(f \star g)(x) = \int_{-\infty}^{+\infty} f(t)\, g(x-t)\, dt`}
 
-The value at ${tex`x`} is the **area under the product** after sliding
-${tex`g`} so that its center lines up with ${tex`x`}. We compute the
+The value at ${tex`x`} is the **area under the product** after flipping
+${tex`g`} and sliding it so that its center lines up with ${tex`x`}. We compute the
 integral numerically with the midpoint rule:
 
 ```js echo
@@ -412,7 +412,7 @@ convolves the samples with a *continuous* filter ${tex`f`}:
 
 ${tex.block`(a \star f)(x) = \sum_i a[i]\, f(x - i)`}
 
-This is the slides' `reconstruct(a, f, x)`. The loop bounds include
+This implements `reconstruct(a, f, x)`. The loop bounds include
 samples at a distance of exactly ${tex`r`}. Every continuous filter gives
 those samples a weight of 0, but including them lets the half-open box
 work too. (The filter library `filters` is defined in the next section.)
@@ -426,7 +426,7 @@ function reconstruct(a, filter, x) {
 }
 ```
 
-The slides' example is ${tex`x = 5.3`} with a radius-2 filter.
+A typical example is ${tex`x = 5.3`} with a radius-2 filter.
 Catmull–Rom weights show which samples contribute (${tex`a[i] = 1`}
 here, so the weights are also the terms):
 
@@ -489,7 +489,7 @@ ${tex`f_s(x) = f(x/s)/s`}. It stretches the filter by ${tex`s`} and
 divides by ${tex`s`}, so the area stays at 1.
 
 ```js echo
-// Piecewise cubics with natural radius 2, written exactly as on the slides.
+// Piecewise cubics with natural radius 2, written piece by piece.
 function fB(x) {
   const t = Math.abs(x);
   if (t <= 1) { const u = 1 - t; return (-3 * u ** 3 + 3 * u ** 2 + 3 * u + 1) / 6; }
@@ -533,7 +533,7 @@ function scaleFilter(filter, s) {
 }
 ```
 
-Two claims from the slides can be checked numerically:
+Two claims about these filters can be checked numerically:
 
 ```js echo
 const filterChecks = {
@@ -590,7 +590,7 @@ a normal distribution that lies within ±3σ.
 
 ### Filter properties, measured
 
-The slides' property table can be computed rather than memorized. A
+A table of filter properties can be computed rather than memorized. A
 filter is **interpolating** when ${tex`f(0)=1`} and ${tex`f(i)=0`} for
 nonzero integers. It **rings** when it has negative values. It is
 **ripple-free** when ${tex`\sum_i f(x+i) = 1`} for every ${tex`x`}:
@@ -631,14 +631,14 @@ Inputs.table(Object.values(filters).map((flt) => {
 })
 ```
 
-The results match the slides. **Box** and **tent** interpolate without
+The table confirms the usual summary. **Box** and **tent** interpolate without
 ringing. The **B-spline** does not ring, but it misses the samples,
 because ${tex`f_B(0) = \tfrac23`}. **Catmull–Rom** interpolates, but it
 rings. **Mitchell–Netravali** sits between the two, with slight ringing.
 The trimmed **Gaussian** is the only filter here that is not ripple-free.
 **Continuity** is easiest to see in the gallery: the box jumps, the tent
-has corners (${tex`C^0`}), the cubics are smooth, and the B-spline is
-the smoothest (${tex`C^2`}).
+has corners (${tex`C^0`}), Catmull–Rom and Mitchell–Netravali are
+${tex`C^1`}, and the B-spline is the smoothest (${tex`C^2`}).
 
 ### Interpolating vs. smooth
 
@@ -736,8 +736,8 @@ ${tex`b_2[i,j] = b_1[i]\, b_1[j]`}. Filtering then splits into a vertical
 pass and a horizontal pass, and the cost per pixel drops from
 ${tex`(2r+1)^2`} to ${tex`2(2r+1)`}. The helpers below work on floating
 point RGB images and clamp coordinates at the borders. Clamping is one of
-the edge strategies discussed later. The slides' `filterImage` trims the
-border instead.
+the edge strategies discussed later. A simpler `filterImage` would trim
+the border instead.
 
 ```js echo
 function toFloatImage(imageData) {
@@ -1062,7 +1062,7 @@ antialiasing filter always trades sharpness against aliasing.**
 Resampling means **sampling a continuous function reconstructed from the
 input**. The same filter does both jobs. By associativity, the
 reconstruction filter ${tex`f`} and the sampling filter ${tex`g`}
-combine into ${tex`g \star f`}. The slides' rule is to let the **lower**
+combine into ${tex`g \star f`}. The rule is to let the **lower**
 resolution set the filter size. When downsampling, scale the filter to
 the output spacing ${tex`\Delta x`}. When upsampling, use it at the input
 spacing.
@@ -1082,7 +1082,7 @@ function reconstructArray(a, filter, x, {s = 1, edge = "clamp"} = {}) {
   return edge === "renormalize" ? (wsum === 0 ? 0 : sum / wsum) : sum;
 }
 
-// The slides' resample(a, xl, xh, n, f) over the source interval (xl, xh).
+// resample(a, xl, xh, n, f) over the source interval (xl, xh).
 // prefilter: false skips the filter scaling, which reduces the box filter
 // to pixel dropping.
 function resample1D(a, xl, xh, n, filter, {prefilter = true, edge = "clamp"} = {}) {
@@ -1243,9 +1243,10 @@ It preserves intensity and is probably the best choice. A production
 implementation renormalizes only in the band of pixels within one filter
 radius of the edge, because the interior never needs it.
 
-## Sampling Theory (Optional)
+## Sampling Theory
 
-The sections above are enough to build excellent resamplers. Sampling
+This section is optional. The sections above are enough to build
+excellent resamplers. Sampling
 theory explains *why* they work, using one more tool: the Fourier
 transform.
 
@@ -1328,7 +1329,7 @@ Plot.plot({
 ```
 
 The dots are the numeric transform, and the gray line is the closed form
-from the slides' table: box ↔ ${tex`\operatorname{sinc}\pi u`}, tent ↔
+from the standard transform pairs: box ↔ ${tex`\operatorname{sinc}\pi u`}, tent ↔
 ${tex`\operatorname{sinc}^2\pi u`}, B-spline ↔ ${tex`\operatorname{sinc}^4\pi u`},
 and Gaussian ↔ a Gaussian. Catmull–Rom and Mitchell–Netravali have only
 the numeric dots. Three properties are visible here:
@@ -1494,27 +1495,27 @@ no bumps for aliases to leak through. Useful filters balance
 - **Treating the sinc as the practical optimum.** It is ideal in the
   frequency domain but rings badly and costs too much in space.
 - **Forgetting the flip for asymmetric filters.** Convolution uses
-  ${tex`b[i-j]`}. Module 02's kernels used cross-correlation, which gives
+  ${tex`b[i-j]`}. Many image libraries use cross-correlation, which gives
   the same result only for symmetric filters.
 
 ## Summary
 
-- Sampling turns continuous functions into arrays, and reconstruction
+- **Sampling and reconstruction:** sampling turns continuous functions into arrays, and reconstruction
   turns them back. **Both need filtering.** A sinusoid above
   ${tex`f_s/2`} produces the same samples as a lower one, as the
   plotted and audible examples showed.
-- **Convolution** is a weighted moving average, or equivalently a sum of
+- **Convolution:** a weighted moving average, or equivalently a sum of
   shifted filters. It comes in discrete, continuous, and
   discrete–continuous (reconstruction) forms, and its algebra lets you
   combine several filters into one.
-- Filters differ in whether they **interpolate**, **ring**, and
+- **Filters:** they differ in whether they **interpolate**, **ring**, and
   **ripple**, and in how **continuous** they are. Each of these
   properties was measured directly above. **Separable** filters reduce
   the cost per pixel from ${tex`O(r^2)`} to ${tex`O(r)`}.
-- For images, blurring, sharpening, and drop shadows are each a single
+- **Images:** blurring, sharpening, and drop shadows are each a single
   convolution. **Antialias** by averaging before sampling. **Resample**
   with one filter whose size is set by the lower resolution, and handle
   edges by renormalizing.
-- In frequency, sampling **copies the spectrum**. Aliasing comes from
+- **Sampling theory:** in frequency, sampling **copies the spectrum**. Aliasing comes from
   copies that overlap (undersampling) and from copies that survive a
   poor reconstruction filter. **Nyquist:** ${tex`f_{\max} < f_s/2`}.

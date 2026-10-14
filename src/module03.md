@@ -16,11 +16,27 @@ import {html} from "npm:htl";
 
 # Module 03 · Transformations and Viewing
 
-Week 1 introduced linear transformations—scaling, rotation, reflection, and shear. Each of those transformations fixes the origin. This module removes that restriction: **homogeneous coordinates** let translation use the same matrix-multiplication framework as the other transformations.
+Module 01's linear transformations (scaling, rotation, reflection, and
+shear) all fix the origin. This module removes that restriction:
+**homogeneous coordinates** let translation use the same
+matrix-multiplication framework as the other transformations. That one
+extension supports the rest of the graphics pipeline:
 
-That one extension supports the rest of the graphics pipeline. We will compose object transforms, express the scene relative to a camera, and project 3D geometry onto a 2D screen. This module focuses on the mathematics and conventions behind those operations; Week 4 applies the same ideas in WebGPU.
+| Topic | What it adds |
+|---|---|
+| **Homogeneous coordinates** | Translation as a matrix, and a clean split between points and vectors |
+| **Composition** | Building one matrix from several transforms, in the right order |
+| **3D transformations** | 4×4 matrices, Euler angles, and gimbal lock |
+| **Viewing and projection** | The camera, perspective and orthographic projection, and the MVP pipeline |
 
-## Why Translation Is Different
+Everything here is plain JavaScript, with cubes drawn as wireframes on a
+2D canvas, so no GPU is needed; Module 04 runs the same matrices in a
+WebGPU vertex shader. This handout teaches the *techniques* behind the
+module; it is not a walkthrough of any graded assignment.
+
+## Homogeneous Coordinates
+
+### Why translation is different
 
 An **affine transformation** has the form ${tex`\mathbf{p}' = A\mathbf{p} + \mathbf{t}`}, where ${tex`A`} is the linear part and ${tex`\mathbf{t}`} is a translation vector. Affine transformations preserve straight lines, parallelism, and ratios along a line.
 
@@ -32,7 +48,7 @@ mat2.apply(mat2.scaling(3, 3), {x: 0, y: 0})
 
 The result is still ${tex`(0,0)`}. No ordinary 2×2 matrix can map the origin to a nonzero location, so translation is not linear. Homogeneous coordinates incorporate that added offset into a larger matrix.
 
-## Homogeneous Coordinates
+### Points, vectors, and w
 
 Represent a 2D point as ${tex`(x,y,1)`} and a 2D displacement vector as ${tex`(x,y,0)`}. The final coordinate, ${tex`w`}, distinguishes the two cases.
 
@@ -95,7 +111,7 @@ const Vprime = mat3.transformVector(T, V);
 
 **V′** = (${Vprime.x.toFixed(2)}, ${Vprime.y.toFixed(2)}). It is identical to **V**, so the purple arrow lies directly on top of the green arrow.
 
-## Composition in 2D
+## Composing Transformations
 
 With homogeneous coordinates, every 2D affine transformation is a 3×3 matrix:
 
@@ -203,7 +219,7 @@ Whenever translation and rotation are combined, ask: **which point is the rotati
 
 ## Transformations in 3D
 
-The same construction extends to 3D. A point becomes ${tex`(x,y,z,1)`}; a vector becomes ${tex`(x,y,z,0)`}; and affine transformations use 4×4 matrices. The module’s [`components/mat4.js`](./components/mat4.js) represents matrices as flat, column-major arrays, matching the convention typically used by graphics APIs.
+The same construction extends to 3D. A point becomes ${tex`(x,y,z,1)`}; a vector becomes ${tex`(x,y,z,0)`}; and affine transformations use 4×4 matrices. The module’s `components/mat4.js` represents matrices as flat, column-major arrays, matching the convention typically used by graphics APIs.
 
 The three principal-axis rotation matrices are
 
@@ -266,7 +282,9 @@ wireframe.renderWireframe(gimbalMVP, {width: 320, height: 320})
 
 At this fixed pitch, the visible orientation depends on the difference ${tex`\mathrm{yaw}-\mathrm{roll}`}. The current effective rotation is ${((gimbalForm.yaw - gimbalForm.roll)).toFixed(0)}°. For example, yaw = 40° and roll = 0° produces the same orientation as yaw = 0° and roll = −40°.
 
-## From Object Space to Screen Space
+## Viewing and Projection
+
+### From object space to screen space
 
 A mesh vertex passes through several coordinate spaces:
 
@@ -347,7 +365,7 @@ screen  (${screenVertex[0].toFixed(0)}, ${screenVertex[1].toFixed(0)}) px   (on 
 
 Move `world z` closer to 0. As the vertex approaches the camera plane, clip-space ${tex`w`} approaches zero, making the perspective divide unstable or undefined. The graphics pipeline clips primitives in clip space before performing that divide.
 
-## The Virtual Camera
+### The virtual camera
 
 A graphics camera is represented by an eye position, a target point, and an up-direction hint. From these values, `lookAt` constructs an orthonormal camera basis. The **view matrix** does not physically move a camera object; instead, it transforms the whole world into coordinates relative to that camera:
 
@@ -384,7 +402,7 @@ Eye position: (${eye[0].toFixed(2)}, ${eye[1].toFixed(2)}, ${eye[2].toFixed(2)})
 
 The rendered view changes even though the cube does not. The view matrix re-expresses every object relative to the current eye position and viewing direction.
 
-## Projection
+### Projection
 
 **Orthographic projection** uses parallel projection rays. It preserves apparent size with depth: a cube twice as far away appears the same size. In homogeneous form, ${tex`w`} remains 1, so there is no meaningful perspective divide.
 
@@ -440,7 +458,7 @@ const orthoMVP = mat4.multiplyAll([orthoProjection, compareView, mat4.identity()
 
 From the same eye position, perspective projection makes the near face look larger than the far face and can make parallel 3D edges converge on screen. Orthographic projection retains parallel edges and does not use depth to change apparent size, which is useful in CAD, technical drawing, and many interface views.
 
-## The Full Pipeline
+### The full pipeline
 
 For a vertex represented by a column vector, the pipeline is
 
@@ -454,15 +472,76 @@ Finally, a viewport transform maps NDC to pixel coordinates. In compact form,
 
 ${tex.block`\mathbf{p}_{\mathrm{screen}}=M_{\mathrm{viewport}}\,\operatorname{divideByW}\!\left(M_{\mathrm{projection}}M_{\mathrm{view}}M_{\mathrm{model}}\mathbf{p}_{\mathrm{object}}\right)`}
 
-The product ${tex`M_{\mathrm{projection}}M_{\mathrm{view}}M_{\mathrm{model}}`} is commonly called the **Model-View-Projection (MVP)** transform. The notation is useful, but remember that the perspective divide is a separate operation between projection and viewport mapping. Week 4 will use the same transformations in a vertex shader.
+The product ${tex`M_{\mathrm{projection}}M_{\mathrm{view}}M_{\mathrm{model}}`} is commonly called the **Model-View-Projection (MVP)** transform. The notation is useful, but remember that the perspective divide is a separate operation between projection and viewport mapping. Module 04 uses the same transformations in a vertex shader.
+
+## Check Your Understanding
+
+1. Write the point ${tex`(2, 5)`} and the vector ${tex`(2, 5)`} in homogeneous coordinates. What does ${tex`T(3, -1)`} do to each?
+2. Where does the point ${tex`(2, 1)`} go under a 90° counterclockwise rotation about the pivot ${tex`(1, 1)`}?
+3. Compute ${tex`T(3,0)R(90^\circ)`} and ${tex`R(90^\circ)T(3,0)`} applied to the point ${tex`(0, 1)`}.
+4. What is the inverse of ${tex`M = T(\mathbf t)\,R(\theta)`}?
+5. In ${tex`R = R_z(\mathrm{yaw})\,R_y(\mathrm{pitch})\,R_x(\mathrm{roll})`}, which rotation acts on a vertex first?
+6. What is lost at gimbal lock, and is it a numerical error?
+7. A vertex has view-space ${tex`z = -10`}. What is its clip-space ${tex`w`} after this module's perspective matrix?
+8. Convert the clip-space point ${tex`(2, -1, 3, 4)`} to NDC.
+9. Using this module's viewport mapping, where do NDC ${tex`x = 0.5`}, ${tex`y = -0.25`} land on a 1920×1080 screen?
+10. Why does the pipeline clip before the perspective divide?
+11. Moving the camera 2 units to the right looks the same as what change to the world? How does that relate to ${tex`M_{\mathrm{view}} = M_{\mathrm{camera}}^{-1}`}?
+12. Under orthographic projection, does a cube twice as far away look smaller?
+
+<details>
+<summary>Answers</summary>
+
+1. The point is ${tex`(2, 5, 1)`} and moves to ${tex`(5, 4, 1)`}. The vector is ${tex`(2, 5, 0)`} and does not change.
+2. (${mat3.transformPoint(mat3.rotateAbout({x: 1, y: 1}, Math.PI / 2), {x: 2, y: 1}).x.toFixed(2)}, ${mat3.transformPoint(mat3.rotateAbout({x: 1, y: 1}, Math.PI / 2), {x: 2, y: 1}).y.toFixed(2)}). Relative to the pivot the point is ${tex`(1, 0)`}, which rotates to ${tex`(0, 1)`}; adding the pivot back gives ${tex`(1, 2)`}.
+3. ${tex`T(3,0)R(90^\circ)`}: rotate to ${tex`(-1, 0)`}, then translate to ${tex`(2, 0)`}. ${tex`R(90^\circ)T(3,0)`}: translate to ${tex`(3, 1)`}, then rotate to ${tex`(-1, 3)`}.
+4. ${tex`M^{-1} = R(-\theta)\,T(-\mathbf t)`}. The inverse of a product reverses the order and inverts each factor.
+5. ${tex`R_x(\mathrm{roll})`}, the rightmost factor.
+6. One rotational degree of freedom. At pitch 90° the yaw and roll axes line up, so the two angles control the same rotation. It is a property of the Euler-angle parameterization, not a rounding error.
+7. ${mat4.transformPoint(mat4.perspective(Math.PI / 3, 1, 0.1, 50), [0, 0, -10])[3]}. The perspective matrix copies ${tex`-z_{\mathrm{view}}`} into ${tex`w`}.
+8. ${tex`(2/4,\ -1/4,\ 3/4) = (0.5, -0.25, 0.75)`}.
+9. ${tex`x = (0.5 \cdot 0.5 + 0.5)\cdot 1920 = 1440`} and ${tex`y = (1 - (-0.25 \cdot 0.5 + 0.5))\cdot 1080 = 675`}. Screen y points down, so NDC y is flipped.
+10. Near the camera plane ${tex`w`} approaches 0, and behind the camera it is negative. Dividing first would blow up coordinates or flip geometry; clipping first removes those parts while the math is still linear.
+11. Moving the whole world 2 units to the left. The view matrix applies the inverse of the camera's placement to everything in the scene.
+12. No. Orthographic projection keeps ${tex`w = 1`}, so depth does not change apparent size.
+
+</details>
+
+## Common Pitfalls
+
+- **Translating directions.** Normals, light directions, and velocities
+  need ${tex`w = 0`}; with ${tex`w = 1`} a translation shifts them.
+- **Reading a product left to right.** In ${tex`M_3M_2M_1\mathbf p`},
+  ${tex`M_1`} acts first.
+- **Rotating about the origin by accident.** To spin an object in place,
+  use ${tex`T(\mathbf c)R(\theta)T(-\mathbf c)`} about its center
+  ${tex`\mathbf c`}.
+- **Mixing row-major and column-major layouts.** `mat4.js` stores
+  matrices as flat column-major arrays. Typing a matrix out row by row
+  transposes it, and the translation ends up in the bottom row.
+- **Dividing by ${tex`w`} before clipping.** Geometry at or behind the
+  camera produces infinite or mirrored coordinates.
+- **Choosing an up vector parallel to the view direction.** `lookAt`
+  takes a cross product of the two, which is zero, so the camera basis
+  becomes `NaN`.
+- **Interpolating Euler angles for smooth rotation.** Near gimbal lock,
+  small orientation changes need large angle changes; use quaternions.
 
 ## Summary
 
-- Homogeneous coordinates add ${tex`w`}: use ${tex`w=1`} for points and ${tex`w=0`} for displacement vectors.
-- Translation becomes matrix multiplication in homogeneous coordinates, while vectors remain unchanged by translation.
-- With column vectors, the rightmost matrix acts first. Composition order changes the result and determines the center of rotation.
-- 3D affine transformations use 4×4 matrices. Euler angles are convenient but can lose a degree of freedom at gimbal lock.
-- The pipeline is object → world → view → clip → NDC → screen. Clipping occurs before the perspective divide.
-- The view matrix expresses the world relative to the camera; the projection matrix maps view-space geometry into clip space.
-- Perspective projection makes apparent size depend on depth, whereas orthographic projection does not.
-
+- **Homogeneous coordinates:** add ${tex`w`}, with ${tex`w = 1`} for
+  points and ${tex`w = 0`} for vectors. Translation becomes a matrix
+  multiplication, and vectors are unaffected by it.
+- **Composition:** with column vectors, the rightmost matrix acts first.
+  Order changes the result and decides the center of rotation, as in
+  ${tex`T(\mathbf p)R(\theta)T(-\mathbf p)`}.
+- **3D transformations:** affine transformations use 4×4 matrices.
+  Euler angles are convenient but lose a degree of freedom at gimbal
+  lock.
+- **Viewing:** the pipeline is object → world → view → clip → NDC →
+  screen, and clipping happens before the perspective divide. The view
+  matrix is the inverse of the camera's placement.
+- **Projection:** perspective projection makes apparent size depend on
+  depth through ${tex`w`}; orthographic projection does not. Together,
+  ${tex`M_{\mathrm{projection}}M_{\mathrm{view}}M_{\mathrm{model}}`} is
+  the MVP transform.

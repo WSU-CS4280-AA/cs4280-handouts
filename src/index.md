@@ -21,12 +21,16 @@ not solutions to the graded assignments.
 - [Module 04 — Graphics Pipeline & WebGPU](/module04)
 - [Module 05 — Surface Shading](/module05)
 - [Module 06 — Signal Processing](/module06)
-<!-- - [Module 08 — Meshes, Model Loading, Scene Graphs](/module08)
-- [Module 09 — Texture Mapping](/module09)
-- [Module 10 — Curves & Splines](/module10)
-- [Module 11 — Sampling](/module11)
-- [Module 12 — Ray Tracing](/module12)
-- [Module 13 — Physically Based Rendering](/module13)
-- [Module 14 — Animation](/module14) -->
+- [Module 07 — Data Structures for Graphics](/module07)
+- [Module 08 — Texture Mapping](/module08)
+- [Module 09 — Curves](/module09)
+- [Module 10 — Sampling](/module10)
+- [Module 11 — Ray Tracing](/module11)
+- [Module 12 — Physics-Based Rendering](/module12)
+- [Module 13 — Computer Animation](/module13)
 
-*(Module 7 is Midterm Review & Midterm; Module 15 is Final Exam Review — no handout for either.)*
+**Tutorials**
+
+- [Making Textures with Canvas 2D](/tutorial-canvas2d-textures): procedural, seamlessly tiling textures uploaded to WebGPU (used by Assignment 4)
+
+Modules 4 and later use WebGPU and need **Chrome or Edge 113+**.

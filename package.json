@@ -3,10 +3,14 @@
   "private": true,
   "scripts": {
     "clean": "rimraf src/.observablehq/cache",
+    "prebuild": "npm run sync-reference",
     "build": "observable build",
+    "predev": "npm run sync-reference",
     "dev": "observable preview",
+    "predeploy": "npm run sync-reference",
     "deploy": "observable deploy",
-    "observable": "observable"
+    "observable": "observable",
+    "sync-reference": "node scripts/sync-reference.js"
   },
   "dependencies": {
     "@observablehq/framework": "^1.13.4"

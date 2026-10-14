@@ -1,9 +1,20 @@
-// Week 8: one iteration of Catmull-Clark subdivision on a manifold
+// Module 07: one iteration of Catmull-Clark subdivision on a manifold
 // polygon mesh (any face arity — a cube's quads work; so would a
 // triangle mesh). Fresh implementation of the three-step lecture rule,
 // not tied to any particular shape.
 
-import * as vec3 from "./vec3.js";
+// Small {x, y, z} vector helpers. (vec3.js is generated from the shared
+// math library and uses [x, y, z] arrays, while meshes here store points
+// as objects, so this file keeps its own.)
+const vec3 = {
+  add: (a, b) => ({x: a.x + b.x, y: a.y + b.y, z: a.z + b.z}),
+  sub: (a, b) => ({x: a.x - b.x, y: a.y - b.y, z: a.z - b.z}),
+  scale: (a, s) => ({x: a.x * s, y: a.y * s, z: a.z * s}),
+  cross: (a, b) => ({x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x}),
+  length: (a) => Math.hypot(a.x, a.y, a.z),
+  normalize: (a) => { const l = Math.hypot(a.x, a.y, a.z) || 1; return {x: a.x / l, y: a.y / l, z: a.z / l}; },
+  triangleNormal: (p0, p1, p2) => vec3.normalize(vec3.cross(vec3.sub(p1, p0), vec3.sub(p2, p0)))
+};
 
 function avg(points) {
   const sum = points.reduce((a, p) => vec3.add(a, p), {x: 0, y: 0, z: 0});
@@ -54,9 +65,9 @@ export function catmullClark({positions, faces}) {
     for (const v of face) vertexFaces[v].push(faceIndex);
   });
 
-  // Step 3: P' = (F + 2R + (n-2)P) / n — F the average incident face
+  // Step 3: P' = (F + 2R + (n-3)P) / n — F the average incident face
   // point, R the average incident edge midpoint, P the original vertex,
-  // n its degree (edge count).
+  // n its degree (edge count). The weights 1/n + 2/n + (n-3)/n sum to 1.
   const updatedVertices = positions.map((P, v) => {
     const n = vertexEdges[v].length;
     if (n === 0) return P;
@@ -65,7 +76,7 @@ export function catmullClark({positions, faces}) {
       const e = edges.get(key);
       return avg([positions[e.a], positions[e.b]]);
     }));
-    const blended = vec3.add(vec3.add(F, vec3.scale(R, 2)), vec3.scale(P, n - 2));
+    const blended = vec3.add(vec3.add(F, vec3.scale(R, 2)), vec3.scale(P, n - 3));
     return vec3.scale(blended, 1 / n);
   });
 
