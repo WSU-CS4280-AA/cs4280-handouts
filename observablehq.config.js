@@ -1,4 +1,4 @@
-import {codeCollapseHead} from "./codeCollapse.js";
+import { codeCollapseHead } from "./codeCollapse.js";
 
 // See https://observablehq.com/framework/config for documentation.
 
