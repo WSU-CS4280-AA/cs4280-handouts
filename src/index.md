@@ -24,8 +24,8 @@ not solutions to the graded assignments.
 - [Module 07 — Data Structures for Graphics](/module07)
 - [Module 08 — Texture Mapping](/module08)
 - [Module 09 — Curves](/module09)
-- [Module 10 — Sampling](/module10)
-- [Module 11 — Ray Tracing](/module11)
+- [Module 10 — Ray Tracing](/module10)
+- [Module 11 — Sampling](/module11)
 - [Module 12 — Physics-Based Rendering](/module12)
 - [Module 13 — Computer Animation](/module13)
 
