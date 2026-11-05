@@ -6,7 +6,7 @@
 // "top of stack", and it's naturally discarded — popped — when a call
 // returns to its caller).
 
-import * as mat4 from "./mat4.js";
+import * as mat4 from "../lib/math/mat4.js";
 
 export class SceneNode {
   constructor(name, localMatrix = mat4.identity(), {mesh = null, children = []} = {}) {

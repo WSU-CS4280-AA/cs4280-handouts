@@ -40,22 +40,29 @@ hide the sidebar and prev/next links on every weekly handout (useful for
 printing or sharing a single week standalone). The home page keeps its
 sidebar regardless.
 
-## Shared code from `reference/`
+## Shared code from `starter/`
 
-`scripts/sync-reference.js` copies shared library code from
-`../reference/src/lib` into `src/components`, so the handouts use the same
-helpers as the assignments:
+`scripts/sync-starter.js` copies the course library from `../starter/src/lib`
+into `src/lib`, so the handouts use the same helpers, at the same paths, as the
+activities and assignments:
 
 | Generated file | Source |
 | --- | --- |
-| `src/components/vec3.js` | `reference/src/lib/math/vec3.js` |
-| `src/components/mat4.js` | `reference/src/lib/math/mat4.js` + `transforms.js` (merged) |
-| `src/components/lib/webgpu.js` | `reference/src/lib/webgpu.js` |
+| `src/lib/webgpu.js` | `starter/src/lib/webgpu.js` |
+| `src/lib/obj-mtl.js` | `starter/src/lib/obj-mtl.js` |
+| `src/lib/math/mat4.js` | `starter/src/lib/math/mat4.js` |
+| `src/lib/math/vec3.js` | `starter/src/lib/math/vec3.js` |
 
-It runs automatically before `npm run dev`, `build`, and `deploy`, or by
-hand with `npm run sync-reference`. Don't edit the generated files; edit
-the sources in `reference/src/lib` instead. If `../reference` is missing,
-the committed copies are kept.
+It runs automatically before `npm run dev`, `build`, and `deploy`, or by hand
+with `npm run sync-starter`. Don't edit the generated files; edit the sources
+in `starter/src/lib` instead. If `../starter` is missing, the committed copies
+are kept.
+
+`src/lib/math/transforms.js` is written for the handouts rather than synced,
+because the starter's copy is an unimplemented assignment deliverable. Its
+function names and signatures match the starter's.
+
+Helpers used only by the handouts live in `src/components`.
 
 ## Command reference
 
@@ -65,4 +72,4 @@ the committed copies are kept.
 | `npm run dev` | Start local preview server |
 | `npm run build` | Build the static site to `./dist` |
 | `npm run clean` | Clear the local data loader cache |
-| `npm run sync-reference` | Re-copy the shared library code from `../reference/src/lib` |
+| `npm run sync-starter` | Re-copy the shared library code from `../starter/src/lib` |

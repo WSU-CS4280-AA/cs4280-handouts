@@ -4,10 +4,10 @@ toc: true
 ---
 
 ```js echo
-import * as vec2 from "./components/vec2.js";
 import * as mat2 from "./components/mat2.js";
 import * as mat3 from "./components/mat3.js";
-import * as mat4 from "./components/mat4.js";
+import * as mat4 from "./lib/math/mat4.js";
+import * as transforms from "./lib/math/transforms.js";
 import * as wireframe from "./components/wireframe.js";
 import {plane, drawArrow, drawPoint, drawPolygon, dragVectors, dragPoints} from "./components/vectorField.js";
 import * as Inputs from "npm:@observablehq/inputs";
@@ -219,7 +219,7 @@ Whenever translation and rotation are combined, ask: **which point is the rotati
 
 ## Transformations in 3D
 
-The same construction extends to 3D. A point becomes ${tex`(x,y,z,1)`}; a vector becomes ${tex`(x,y,z,0)`}; and affine transformations use 4×4 matrices. The module’s `components/mat4.js` represents matrices as flat, column-major arrays, matching the convention typically used by graphics APIs.
+The same construction extends to 3D. A point becomes ${tex`(x,y,z,1)`}; a vector becomes ${tex`(x,y,z,0)`}; and affine transformations use 4×4 matrices. The module’s `lib/math/mat4.js` represents matrices as flat, column-major arrays, matching the convention typically used by graphics APIs.
 
 The three principal-axis rotation matrices are
 
@@ -240,13 +240,13 @@ const eulerForm = view(Inputs.form({
 ```
 
 ```js echo
-const eulerModel = mat4.fromEulerZYX(
+const eulerModel = transforms.fromEulerZYX(
   (eulerForm.yaw * Math.PI) / 180,
   (eulerForm.pitch * Math.PI) / 180,
   (eulerForm.roll * Math.PI) / 180
 );
-const fixedView = mat4.lookAt([0, 0, 5], [0, 0, 0], [0, 1, 0]);
-const fixedProjection = mat4.perspective((45 * Math.PI) / 180, 1, 0.1, 20);
+const fixedView = transforms.lookAt([0, 0, 5], [0, 0, 0], [0, 1, 0]);
+const fixedProjection = transforms.perspective((45 * Math.PI) / 180, 1, 0.1, 20);
 const eulerMVP = mat4.multiplyAll([fixedProjection, fixedView, eulerModel]);
 ```
 
@@ -268,7 +268,7 @@ const gimbalForm = view(Inputs.form({
 ```
 
 ```js echo
-const gimbalModel = mat4.fromEulerZYX(
+const gimbalModel = transforms.fromEulerZYX(
   (gimbalForm.yaw * Math.PI) / 180,
   Math.PI / 2,
   (gimbalForm.roll * Math.PI) / 180
@@ -337,9 +337,9 @@ const modelForm = view(Inputs.form({
 
 ```js echo
 const objectVertex = [1, 1, 1];
-const modelMatrix = mat4.translate(modelForm.wx, modelForm.wy, modelForm.wz);
-const viewMatrix = mat4.lookAt([0, 0, 0], [0, 0, -1], [0, 1, 0]);
-const projMatrix = mat4.perspective((60 * Math.PI) / 180, 1, 0.1, 50);
+const modelMatrix = transforms.translate(modelForm.wx, modelForm.wy, modelForm.wz);
+const viewMatrix = transforms.lookAt([0, 0, 0], [0, 0, -1], [0, 1, 0]);
+const projMatrix = transforms.perspective((60 * Math.PI) / 180, 1, 0.1, 50);
 
 const worldVertex = mat4.transformPoint(modelMatrix, objectVertex);
 const viewVertex = mat4.transformPoint(viewMatrix, worldVertex);
@@ -389,8 +389,8 @@ const eye = [
   orbitForm.distance * Math.sin(el),
   orbitForm.distance * Math.cos(el) * Math.cos(az)
 ];
-const orbitView = mat4.lookAt(eye, [0, 0, 0], [0, 1, 0]);
-const orbitProjection = mat4.perspective((50 * Math.PI) / 180, 1, 0.1, 30);
+const orbitView = transforms.lookAt(eye, [0, 0, 0], [0, 1, 0]);
+const orbitProjection = transforms.perspective((50 * Math.PI) / 180, 1, 0.1, 30);
 const orbitMVP = mat4.multiplyAll([orbitProjection, orbitView, mat4.identity()]);
 ```
 
@@ -417,9 +417,9 @@ const projForm = view(Inputs.form({
 
 ```js echo
 const compareEye = [3, 2, 5];
-const compareView = mat4.lookAt(compareEye, [0, 0, 0], [0, 1, 0]);
-const perspProjection = mat4.perspective((projForm.fov * Math.PI) / 180, 1, 0.1, 30);
-const orthoProjection = mat4.ortho(
+const compareView = transforms.lookAt(compareEye, [0, 0, 0], [0, 1, 0]);
+const perspProjection = transforms.perspective((projForm.fov * Math.PI) / 180, 1, 0.1, 30);
+const orthoProjection = transforms.ortho(
   -projForm.orthoExtent,
   projForm.orthoExtent,
   -projForm.orthoExtent,
@@ -498,7 +498,7 @@ The product ${tex`M_{\mathrm{projection}}M_{\mathrm{view}}M_{\mathrm{model}}`} i
 4. ${tex`M^{-1} = R(-\theta)\,T(-\mathbf t)`}. The inverse of a product reverses the order and inverts each factor.
 5. ${tex`R_x(\mathrm{roll})`}, the rightmost factor.
 6. One rotational degree of freedom. At pitch 90° the yaw and roll axes line up, so the two angles control the same rotation. It is a property of the Euler-angle parameterization, not a rounding error.
-7. ${mat4.transformPoint(mat4.perspective(Math.PI / 3, 1, 0.1, 50), [0, 0, -10])[3]}. The perspective matrix copies ${tex`-z_{\mathrm{view}}`} into ${tex`w`}.
+7. ${mat4.transformPoint(transforms.perspective(Math.PI / 3, 1, 0.1, 50), [0, 0, -10])[3]}. The perspective matrix copies ${tex`-z_{\mathrm{view}}`} into ${tex`w`}.
 8. ${tex`(2/4,\ -1/4,\ 3/4) = (0.5, -0.25, 0.75)`}.
 9. ${tex`x = (0.5 \cdot 0.5 + 0.5)\cdot 1920 = 1440`} and ${tex`y = (1 - (-0.25 \cdot 0.5 + 0.5))\cdot 1080 = 675`}. Screen y points down, so NDC y is flipped.
 10. Near the camera plane ${tex`w`} approaches 0, and behind the camera it is negative. Dividing first would blow up coordinates or flip geometry; clipping first removes those parts while the math is still linear.

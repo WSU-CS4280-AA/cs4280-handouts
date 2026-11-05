@@ -5,14 +5,14 @@ toc: true
 
 ```js echo
 import * as d3 from "npm:d3";
-import * as mat4 from "./components/mat4.js";
+import * as mat4 from "./lib/math/mat4.js";
+import * as transforms from "./lib/math/transforms.js";
 import * as mat3 from "./components/mat3.js";
 import * as geometry from "./components/geometry.js";
 import * as mesh from "./components/mesh.js";
 import * as subdivision from "./components/subdivision.js";
 import {SceneNode, traverse} from "./components/scenegraph.js";
-import * as webgpu from "./components/webgpu.js";
-import {createBuffer, Mesh} from "./components/lib/webgpu.js";
+import {initializeWebGPU, createBuffer, Mesh} from "./lib/webgpu.js";
 import * as wireframe from "./components/wireframe.js";
 import {plane} from "./components/vectorField.js";
 import * as Inputs from "npm:@observablehq/inputs";
@@ -367,7 +367,7 @@ const fanOfQuery = trianglesOfVertex(icoNeighbors, queryVertex);
 (() => {
   const size = 320;
   const eye = [2.2, 1.6, 2.6];
-  const mvp = mat4.multiply(mat4.perspective(0.75, 1, 0.1, 10), mat4.lookAt(eye, [0, 0, 0], [0, 1, 0]));
+  const mvp = mat4.multiply(transforms.perspective(0.75, 1, 0.1, 10), transforms.lookAt(eye, [0, 0, 0], [0, 1, 0]));
   const proj = icoMesh.positions.map((p) => wireframe.project(mvp, p, size, size));
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = size;
@@ -573,8 +573,8 @@ const ccValence = (() => {
 ```js echo
 (() => {
   const az = (ccForm.azimuth * Math.PI) / 180;
-  const mvp = mat4.multiply(mat4.perspective(Math.PI / 4, 1, 0.1, 20),
-    mat4.lookAt([4.5 * Math.cos(0.45) * Math.sin(az), 4.5 * Math.sin(0.45), 4.5 * Math.cos(0.45) * Math.cos(az)], [0, 0, 0], [0, 1, 0]));
+  const mvp = mat4.multiply(transforms.perspective(Math.PI / 4, 1, 0.1, 20),
+    transforms.lookAt([4.5 * Math.cos(0.45) * Math.sin(az), 4.5 * Math.sin(0.45), 4.5 * Math.cos(0.45) * Math.cos(az)], [0, 0, 0], [0, 1, 0]));
   return wireframe.renderWireframe(mvp, {width: 320, height: 320, vertices: ccMesh.positions,
     edges: subdivision.facesToEdges(ccMesh.faces), showAxes: false});
 })()
@@ -702,12 +702,12 @@ const ferryForm = view(Inputs.form({
 
 ```js echo
 const ferryTree = (() => {
-  const spin = mat4.rotateZ((-ferryForm.wheelSpin * Math.PI) / 180);
+  const spin = transforms.rotateZ((-ferryForm.wheelSpin * Math.PI) / 180);
   const node = (name, matrixName, local, children = [], draws = true) => ({name, matrixName, local, children, draws});
-  return node("ferry", "M0", mat4.translate(ferryForm.ferryX, 0, 0), [
-    node("car body", "M1", mat4.translate(ferryForm.carX, 0.55, 0), [
-      node("left wheel", "M2", mat4.multiply(mat4.translate(-0.45, -0.25, 0), spin)),
-      node("right wheel", "M3", mat4.multiply(mat4.translate(0.45, -0.25, 0), spin))
+  return node("ferry", "M0", transforms.translate(ferryForm.ferryX, 0, 0), [
+    node("car body", "M1", transforms.translate(ferryForm.carX, 0.55, 0), [
+      node("left wheel", "M2", mat4.multiply(transforms.translate(-0.45, -0.25, 0), spin)),
+      node("right wheel", "M3", mat4.multiply(transforms.translate(0.45, -0.25, 0), spin))
     ])
   ]);
 })();
@@ -752,7 +752,7 @@ and returning from a call pops it.
 ## Meshes and Scene Graphs in WebGPU
 
 ```js echo
-const {adapter, device} = await webgpu.requestDevice();
+const {device, format: canvasFormat} = await initializeWebGPU(document.createElement("canvas"));   // a blank canvas: each demo adds its own below
 ```
 
 Validation errors in WebGPU are reported asynchronously, so we display
@@ -814,8 +814,6 @@ The `shaderLocation` numbers connect each attribute to the matching
 the wrong winding is still visible here:
 
 ```js echo
-const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
-
 const vertexLayout = {
   arrayStride: 6 * 4,                                     // 6 floats = 24 bytes per vertex
   attributes: [
@@ -836,29 +834,10 @@ function makeLitPipeline(topology = "triangle-list", extra = {}) {
 const litPipeline = makeLitPipeline();
 ```
 
-**3. Vertex and index buffers.** `mappedAtCreation: true` creates a
-buffer whose memory the CPU can write right away. We copy the data into
-`getMappedRange()` and then `unmap()` it, which hands the buffer to the
-GPU. Buffer sizes must be multiples of 4 bytes. A `Uint16Array` with an
-odd number of indices is 2 bytes short, so `makeIndexBuffer` pads it
-with one extra index that is never drawn:
-
-```js echo
-function makeVertexBuffer(data) {
-  const buffer = device.createBuffer({size: data.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST, mappedAtCreation: true});
-  new Float32Array(buffer.getMappedRange()).set(data);
-  buffer.unmap();
-  return buffer;
-}
-function makeIndexBuffer(data) {
-  const padded = new Uint16Array(Math.ceil(data.length / 2) * 2);   // round up to a multiple of 4 bytes
-  padded.set(data);
-  const buffer = device.createBuffer({size: padded.byteLength, usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST, mappedAtCreation: true});
-  new Uint16Array(buffer.getMappedRange()).set(padded);
-  buffer.unmap();
-  return buffer;
-}
-```
+**3. Vertex and index buffers.** `createBuffer` from Module 05 uploads the
+data. Buffer sizes must be multiples of 4 bytes. A `Uint16Array` with an odd
+number of indices is 2 bytes short, so `createBuffer` pads it with bytes that
+are never drawn.
 
 **4. A canvas to draw into, and a drawable.** `makeCanvas` returns a
 configured canvas plus a depth texture of the same size. A **drawable**
@@ -867,11 +846,11 @@ bind group pointing at its own 80-byte uniform buffer (a 64-byte matrix
 plus a 16-byte color):
 
 ```js echo
-function makeCanvas(size) {
+async function makeCanvas(size) {
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = size;
   canvas.style.borderRadius = "8px";
-  const {context} = webgpu.configureCanvas(canvas, device);
+  const {context} = await initializeWebGPU(canvas, {device});
   const depthTexture = device.createTexture({size: [size, size], format: "depth24plus", usage: GPUTextureUsage.RENDER_ATTACHMENT});
   return {canvas, context, depthTexture};
 }
@@ -962,10 +941,10 @@ const icoSeparate = (() => {
   const corners = gpuIco.faces.flat().map((i) => gpuIco.positions[i]);
   return packInterleaved(corners, corners);
 })();
-const icoMVP = mat4.multiply(mat4.perspective(0.75, 1, 0.1, 10), mat4.lookAt([2.2, 1.6, 2.6], [0, 0, 0], [0, 1, 0]));
-const icoTargets = [makeCanvas(240), makeCanvas(240)];
-renderScenePass(icoTargets[0], [makeDrawable(makeVertexBuffer(icoIndexed.vertices), makeIndexBuffer(icoIndexed.indices), icoIndexed.indices.length, icoMVP, [0.3, 0.55, 0.85])]);
-renderScenePass(icoTargets[1], [makeDrawable(makeVertexBuffer(icoSeparate), null, icoSeparate.length / 6, icoMVP, [0.85, 0.45, 0.25])]);
+const icoMVP = mat4.multiply(transforms.perspective(0.75, 1, 0.1, 10), transforms.lookAt([2.2, 1.6, 2.6], [0, 0, 0], [0, 1, 0]));
+const icoTargets = [await makeCanvas(240), await makeCanvas(240)];
+renderScenePass(icoTargets[0], [makeDrawable(createBuffer(device, icoIndexed.vertices, GPUBufferUsage.VERTEX), createBuffer(device, icoIndexed.indices, GPUBufferUsage.INDEX), icoIndexed.indices.length, icoMVP, [0.3, 0.55, 0.85])]);
+renderScenePass(icoTargets[1], [makeDrawable(createBuffer(device, icoSeparate, GPUBufferUsage.VERTEX), null, icoSeparate.length / 6, icoMVP, [0.85, 0.45, 0.25])]);
 ```
 
 ```js echo
@@ -1039,10 +1018,9 @@ once. Only the matrix in each slot differs:
 
 ```js echo
 const sphereGeo = geometry.createSphere(16, 20);
-const sphereVB = makeVertexBuffer(geometry.interleave(sphereGeo.positions, sphereGeo.normals));
-const sphereIB = makeIndexBuffer(sphereGeo.indices);
-const solarTarget = makeCanvas(340);
-const solarVP = mat4.multiply(mat4.perspective(0.84, 1, 0.1, 30), mat4.lookAt([0, 4.5, 7.5], [0, 0, 0], [0, 1, 0]));
+const sphereMesh = new Mesh(device, {vertices: geometry.interleave(sphereGeo.positions, sphereGeo.normals), indices: sphereGeo.indices});
+const solarTarget = await makeCanvas(340);
+const solarVP = mat4.multiply(transforms.perspective(0.84, 1, 0.1, 30), transforms.lookAt([0, 4.5, 7.5], [0, 0, 0], [0, 1, 0]));
 ```
 
 ```js echo
@@ -1058,12 +1036,12 @@ const solarWorld = (() => {
   const r = (deg) => (deg * Math.PI) / 180;
   const node = (name, m, children = [], color = null) => Object.assign(new SceneNode(name, m, {children}), {color});
   const root = node("System", mat4.identity(), [
-    node("Sun", mat4.scale(0.6, 0.6, 0.6), [], [1, 0.8, 0.2]),
-    node("EarthPivot", mat4.rotateY(r(solarForm.earthOrbit)), [
-      node("EarthOffset", mat4.translate(2.6, 0, 0), [
-        node("Earth", mat4.multiply(mat4.rotateY(r(solarForm.earthSpin)), mat4.scale(0.32, 0.32, 0.32)), [], [0.3, 0.5, 0.9]),
-        node("MoonPivot", mat4.rotateY(r(solarForm.moonOrbit)), [
-          node("MoonOffset", mat4.translate(0.75, 0, 0), [node("Moon", mat4.scale(0.15, 0.15, 0.15), [], [0.65, 0.65, 0.65])])
+    node("Sun", transforms.scale(0.6, 0.6, 0.6), [], [1, 0.8, 0.2]),
+    node("EarthPivot", transforms.rotateY(r(solarForm.earthOrbit)), [
+      node("EarthOffset", transforms.translate(2.6, 0, 0), [
+        node("Earth", mat4.multiply(transforms.rotateY(r(solarForm.earthSpin)), transforms.scale(0.32, 0.32, 0.32)), [], [0.3, 0.5, 0.9]),
+        node("MoonPivot", transforms.rotateY(r(solarForm.moonOrbit)), [
+          node("MoonOffset", transforms.translate(0.75, 0, 0), [node("Moon", transforms.scale(0.15, 0.15, 0.15), [], [0.65, 0.65, 0.65])])
         ])
       ])
     ])
@@ -1096,11 +1074,9 @@ Each draw then selects its node's slot with `setBindGroup(0, group,
   const encoder = device.createCommandEncoder();
   const pass = beginPass(encoder, solarTarget);
   pass.setPipeline(dynamicPipeline);
-  pass.setVertexBuffer(0, sphereVB);
-  pass.setIndexBuffer(sphereIB, "uint16");
   solarWorld.forEach((d, i) => {
     pass.setBindGroup(0, slotBindGroup, [i * SLOT]);
-    pass.drawIndexed(sphereGeo.indices.length);
+    sphereMesh.draw(pass);
   });
   pass.end();
   device.queue.submit([encoder.finish()]);
@@ -1179,10 +1155,8 @@ const cube = unitCube();
 ```
 
 The cube has ${cube.vertices.length / 6} vertices and
-${cube.indices.length} indices. It is uploaded **once**. From here on we
-use the two buffer helpers from the course library,
-`reference/src/lib/webgpu.js`, the same ones the assignments use (they
-are copied into `components/lib/webgpu.js`):
+${cube.indices.length} indices. It is uploaded **once**, with the
+two buffer helpers from the course library, `lib/webgpu.js`:
 
 - `createBuffer(device, data, usage)` creates a buffer of the right size
   (rounded up to a multiple of 4 bytes), adds `COPY_DST`, and writes
@@ -1214,7 +1188,7 @@ applied to a point first:
 
 ```js echo
 function boxTransform(center, size) {
-  return mat4.multiply(mat4.translate(...center), mat4.scale(...size));
+  return mat4.multiply(transforms.translate(...center), transforms.scale(...size));
 }
 ```
 
@@ -1292,7 +1266,7 @@ const SPACING = {x: 0.8, z: 0.9};   // chair center to chair center, in meters
 function chairPlacement(row, col, rows, cols) {
   const x = (col - (cols - 1) / 2) * SPACING.x;
   const z = (row - (rows - 1) / 2) * SPACING.z;
-  return mat4.translate(x, 0, z);                              // P_ij
+  return transforms.translate(x, 0, z);                              // P_ij
 }
 ```
 
@@ -1451,7 +1425,7 @@ same way:
 
 ```js echo
 {
-  const M = mat4.multiplyAll([mat4.translate(1, 2, 3), mat4.rotateY(0.7), mat4.scale(1.6, 0.05, 0.8)]);
+  const M = mat4.multiplyAll([transforms.translate(1, 2, 3), transforms.rotateY(0.7), transforms.scale(1.6, 0.05, 0.8)]);
   const n = [0.6, 0.8, 0];                                        // a slanted object-space normal
   const unit = (v) => v.map((x) => x / Math.hypot(...v));
   const col = (k) => [M[4 * k], M[4 * k + 1], M[4 * k + 2]];
@@ -1521,7 +1495,7 @@ const roomBindGroup = device.createBindGroup({
   layout: instancingPipeline.getBindGroupLayout(0),
   entries: [{binding: 0, resource: {buffer: roomCamera}}]
 });
-const roomTarget = makeCanvas(420);
+const roomTarget = await makeCanvas(420);
 ```
 
 ### Step 6: one draw call for the whole room
@@ -1564,7 +1538,7 @@ const roomViewProj = (() => {
   const extent = Math.max(roomSize.cols * SPACING.x, roomSize.rows * SPACING.z);
   const dist = 0.9 * extent + 2, az = (roomView.azimuth * Math.PI) / 180, el = 0.6;
   const eye = [dist * Math.cos(el) * Math.sin(az), dist * Math.sin(el), dist * Math.cos(el) * Math.cos(az)];
-  return mat4.multiply(mat4.perspective(0.8, 1, 0.1, 4 * dist), mat4.lookAt(eye, [0, 0.3, 0], [0, 1, 0]));
+  return mat4.multiply(transforms.perspective(0.8, 1, 0.1, 4 * dist), transforms.lookAt(eye, [0, 0.3, 0], [0, 1, 0]));
 })();
 ```
 
@@ -1671,7 +1645,7 @@ const storagePipeline = device.createRenderPipeline({
   depthStencil: {format: "depth24plus", depthWriteEnabled: true, depthCompare: "less"}
 });
 const storageVP = device.createBuffer({size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
-const storageTarget = makeCanvas(340);
+const storageTarget = await makeCanvas(340);
 const instIco = icosphere(2);
 const instIcoMesh = new Mesh(device, {
   vertices: packInterleaved(instIco.positions, instIco.positions),   // a unit sphere's normal is its position
@@ -1694,7 +1668,7 @@ const sphereGrid = (() => {
   const data = new Float32Array(count * 20);
   let k = 0;
   for (let ix = 0; ix < n; ix++) for (let iy = 0; iy < n; iy++) for (let iz = 0; iz < n; iz++) {
-    data.set(mat4.multiply(mat4.translate(ix - half, iy - half, iz - half), mat4.scale(0.35, 0.35, 0.35)), k * 20);
+    data.set(mat4.multiply(transforms.translate(ix - half, iy - half, iz - half), transforms.scale(0.35, 0.35, 0.35)), k * 20);
     data.set([ix / (n - 1), iy / (n - 1), iz / (n - 1), 1], k * 20 + 16);
     k++;
   }
@@ -1712,7 +1686,7 @@ the same `mesh.draw(pass, 0, instanceCount)`:
   const storage = createBuffer(device, data, GPUBufferUsage.STORAGE);
   invalidation.then(() => storage.destroy());
   const dist = n * 1.9 + 2;
-  device.queue.writeBuffer(storageVP, 0, mat4.multiply(mat4.perspective(0.73, 1, 0.1, 200), mat4.lookAt([dist * 0.6, dist * 0.5, dist * 0.7], [0, 0, 0], [0, 1, 0])));
+  device.queue.writeBuffer(storageVP, 0, mat4.multiply(transforms.perspective(0.73, 1, 0.1, 200), transforms.lookAt([dist * 0.6, dist * 0.5, dist * 0.7], [0, 0, 0], [0, 1, 0])));
   const bindGroup = device.createBindGroup({layout: storagePipeline.getBindGroupLayout(0), entries: [
     {binding: 0, resource: {buffer: storageVP}}, {binding: 1, resource: {buffer: storage}}]});
   const encoder = device.createCommandEncoder();

@@ -1,7 +1,7 @@
-// GENERATED FILE — do not edit directly.
-// Synced from reference/src/lib/math/vec3.js by scripts/sync-reference.js
-// (runs automatically before dev/build/deploy). Edit the source files in
-// reference/src/lib/ and re-run `npm run sync-reference` instead.
+// GENERATED FILE: do not edit directly.
+// Synced from starter/src/lib/math/vec3.js by scripts/sync-starter.js
+// (runs automatically before dev/build/deploy). Edit the source file in
+// starter/src/lib/ and re-run `npm run sync-starter` instead.
 
 /**
  * Minimal 3D vector utilities. Vectors are plain `[x, y, z]` arrays so they

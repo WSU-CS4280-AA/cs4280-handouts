@@ -7,10 +7,6 @@
 //       | m10  m11  m12 |
 //       | m20  m21  m22 |
 
-export function identity() {
-  return {m00: 1, m01: 0, m02: 0, m10: 0, m11: 1, m12: 0, m20: 0, m21: 0, m22: 1};
-}
-
 // Applies M to a homogeneous (x, y, w) triple.
 export function apply(M, p) {
   return {
@@ -50,25 +46,13 @@ export function translation(tx, ty) {
   return {m00: 1, m01: 0, m02: tx, m10: 0, m11: 1, m12: ty, m20: 0, m21: 0, m22: 1};
 }
 
-export function scaling(sx, sy) {
-  return {m00: sx, m01: 0, m02: 0, m10: 0, m11: sy, m12: 0, m20: 0, m21: 0, m22: 1};
-}
-
 export function rotation(theta) {
   const c = Math.cos(theta), s = Math.sin(theta);
   return {m00: c, m01: -s, m02: 0, m10: s, m11: c, m12: 0, m20: 0, m21: 0, m22: 1};
-}
-
-export function shearX(lambda) {
-  return {m00: 1, m01: lambda, m02: 0, m10: 0, m11: 1, m12: 0, m20: 0, m21: 0, m22: 1};
 }
 
 // Rotates about an arbitrary pivot: translate the pivot to the origin,
 // rotate, translate back — T(pivot) * R(theta) * T(-pivot).
 export function rotateAbout(pivot, theta) {
   return multiply(multiply(translation(pivot.x, pivot.y), rotation(theta)), translation(-pivot.x, -pivot.y));
-}
-
-export function multiplyAll(matrices) {
-  return matrices.reduce((acc, m) => multiply(acc, m));
 }

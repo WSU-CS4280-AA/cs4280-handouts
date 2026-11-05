@@ -7,8 +7,9 @@ toc: true
 import * as d3 from "npm:d3";
 import * as vec2 from "./components/vec2.js";
 import * as mat2 from "./components/mat2.js";
-import * as webgpu from "./components/webgpu.js";
-import * as obj from "./components/obj.js";
+import {initializeWebGPU, animate} from "./lib/webgpu.js";
+import * as obj from "./lib/obj-mtl.js";
+import * as objMesh from "./components/objMesh.js";
 import {plane, drawPoint, drawArrow, drawPolygon, dragPoints} from "./components/vectorField.js";
 import * as Inputs from "npm:@observablehq/inputs";
 import {html} from "npm:htl";
@@ -985,16 +986,16 @@ The GPU rasterizes only points, lines, and triangles, so every curve is
 Both canvases below draw the cubic Bézier from the de Casteljau figure:
 
 ```js echo
-const {adapter, device} = await webgpu.requestDevice();
-const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
+const {device, format: canvasFormat} = await initializeWebGPU(document.createElement("canvas"));   // a blank canvas: each demo adds its own below
 const deviceErrorLog = document.createElement("pre");
 deviceErrorLog.style.cssText = "display: none; color: #e5484d; background: #2a1214; border: 1px solid #e5484d; border-radius: 6px; padding: 8px 12px; font-size: 12px; white-space: pre-wrap;";
 device.addEventListener("uncapturederror", (e) => { deviceErrorLog.textContent += `WebGPU error: ${e.error.message}\n`; deviceErrorLog.style.display = "block"; });
-const makeCanvas = (width, height) => {
+const makeCanvas = async (width, height) => {
   const canvas = document.createElement("canvas");
   canvas.width = width; canvas.height = height;
   canvas.style.borderRadius = "8px";
-  return {canvas, context: webgpu.configureCanvas(canvas, device).context};
+  const {context} = await initializeWebGPU(canvas, {device});
+  return {canvas, context};
 };
 ```
 
@@ -1112,9 +1113,9 @@ const linePipeline = makeCurvePipeline("vs_line", "line-strip");
 const thickPipeline = makeCurvePipeline("vs_thick", "triangle-strip");
 const curveUniforms = device.createBuffer({size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
 const curveBindGroup = (pipeline) => device.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries: [{binding: 0, resource: {buffer: curveUniforms}}]});
-const cpuTarget = makeCanvas(300, 300);
-const gpuLineTarget = {...makeCanvas(300, 300), bindGroup: curveBindGroup(linePipeline)};
-const thickTarget = {...makeCanvas(420, 260), bindGroup: curveBindGroup(thickPipeline)};
+const cpuTarget = await makeCanvas(300, 300);
+const gpuLineTarget = {...(await makeCanvas(300, 300)), bindGroup: curveBindGroup(linePipeline)};
+const thickTarget = {...(await makeCanvas(420, 260)), bindGroup: curveBindGroup(thickPipeline)};
 ```
 
 The vertex shader uses the same Bernstein form as `bernsteinPoint`. Drag
@@ -1302,7 +1303,9 @@ const fieldData = new ArrayBuffer(8), fieldU32 = new Uint32Array(fieldData), fie
 const fieldUniform = device.createBuffer({size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
 const grassBindGroup = device.createBindGroup({layout: grassPipeline.getBindGroupLayout(0), entries: [
   {binding: 0, resource: {buffer: bladeBuffer}}, {binding: 1, resource: {buffer: fieldUniform}}]});
-const grassTarget = makeCanvas(420, 260);
+const grassTarget = await makeCanvas(420, 260);
+grassTarget.canvas.style.width = "420px";        // animate() sizes the canvas from its CSS size
+grassTarget.canvas.style.height = "260px";
 ```
 
 ```js echo
@@ -1312,22 +1315,30 @@ const grassForm = view(Inputs.form({
 }));
 ```
 
-```js echo
-grassTarget.canvas
-```
+`animate` from the course library runs the frame loop: it begins the render
+pass, calls `onFrame`, and submits the commands. This pipeline has no depth
+buffer, so it passes `depth: false`. `animate` returns a function that stops
+the loop, which this cell calls when a control change re-runs it:
 
 ```js echo
 {
-  fieldU32[0] = grassForm.samples;
-  fieldF32[1] = now / 1000;                          // `now` is Observable's clock, in milliseconds
-  device.queue.writeBuffer(fieldUniform, 0, fieldData);
-  const encoder = device.createCommandEncoder();
-  const pass = encoder.beginRenderPass({colorAttachments: [{view: grassTarget.context.getCurrentTexture().createView(), clearValue: {r: 0.55, g: 0.75, b: 0.95, a: 1}, loadOp: "clear", storeOp: "store"}]});
-  pass.setPipeline(grassPipeline);
-  pass.setBindGroup(0, grassBindGroup);
-  pass.draw(grassForm.samples + 1, grassForm.count);   // one instance per curve
-  pass.end();
-  device.queue.submit([encoder.finish()]);
+  display(grassTarget.canvas);   // on the page first, so animate() can measure it
+  const stop = animate({
+    canvas: grassTarget.canvas,
+    device,
+    context: grassTarget.context,
+    depth: false,
+    clearColor: {r: 0.55, g: 0.75, b: 0.95, a: 1},
+    onFrame: ({renderPass, time}) => {
+      fieldU32[0] = grassForm.samples;
+      fieldF32[1] = time;
+      device.queue.writeBuffer(fieldUniform, 0, fieldData);
+      renderPass.setPipeline(grassPipeline);
+      renderPass.setBindGroup(0, grassBindGroup);
+      renderPass.draw(grassForm.samples + 1, grassForm.count);   // one instance per curve
+    }
+  });
+  invalidation.then(stop);
 }
 ```
 
@@ -1406,7 +1417,7 @@ table more accurate; rebuild it whenever the curve changes.
 ### OBJ, MTL, and material groups
 
 To move something along a path, we need a model. Module 08 covered the
-OBJ and MTL formats and `components/obj.js`: `v`, `vt`, `vn`, and `f`
+OBJ and MTL formats and `lib/obj-mtl.js`: `v`, `vt`, `vn`, and `f`
 records with **1-based** indices, fan-triangulated polygons, and
 materials whose `Kd`, `Ks`, and `Ns` map onto Blinn–Phong. Here is a
 small signpost, written in centimeters and far from the origin. Its
@@ -1469,15 +1480,15 @@ Sorting them by material gives one group per material, each a
 `drawIndexed(count, 1, first)` after binding that material:
 
 ```js echo
-const signRuns = signParsed.faceMaterials.reduce((runs, material, i) => {
+const signRuns = signParsed.triangles.map((t) => t.material).reduce((runs, material, i) => {
   if (runs.length && runs.at(-1).material === material) runs.at(-1).triangles++;
   else runs.push({material, "first triangle": i, triangles: 1});
   return runs;
 }, []);
 const signGroups = (() => {
   let first = 0;
-  return [...obj.groupFacesByMaterial(signParsed)].map(([material, faces]) => {
-    const group = {material, first, count: 3 * faces.length, Kd: signMTL[material].Kd.join(" ")};
+  return [...objMesh.groupTrianglesByMaterial(signParsed.triangles)].map(([material, triangles]) => {
+    const group = {material, first, count: 3 * triangles.length, Kd: signMTL[material].Kd.join(" ")};
     first += group.count;
     return group;
   });
@@ -1505,13 +1516,13 @@ extent to 2, so it fits in ${tex`[-1, 1]^3`}:
 ```js echo
 function boundingBox(positions) {
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
-  for (const p of positions) [p.x, p.y, p.z].forEach((v, c) => { min[c] = Math.min(min[c], v); max[c] = Math.max(max[c], v); });
+  for (const p of positions) p.forEach((v, c) => { min[c] = Math.min(min[c], v); max[c] = Math.max(max[c], v); });
   return {min, max};
 }
 function fitToUnitBox(positions, {min, max}) {
   const center = min.map((v, c) => (v + max[c]) / 2);
   const scale = 2 / Math.max(...max.map((v, c) => v - min[c]));   // the largest extent becomes 2
-  return positions.map((p) => ({x: (p.x - center[0]) * scale, y: (p.y - center[1]) * scale, z: (p.z - center[2]) * scale}));
+  return positions.map((p) => p.map((v, c) => (v - center[c]) * scale));
 }
 const signBox = boundingBox(signParsed.positions);
 const signFitted = fitToUnitBox(signParsed.positions, signBox);
@@ -1523,8 +1534,8 @@ const signFitted = fitToUnitBox(signParsed.positions, signBox);
   const sideView = (positions, domain) => Plot.plot({
     width: 300, height: 300, x: {domain}, y: {domain}, grid: true, color: {type: "identity"},
     marks: [
-      Plot.line(signParsed.faces.flatMap((tri, k) => [...tri, tri[0]].map((c) => ({k, ...positions[c.p],
-        color: `rgb(${signMTL[signParsed.faceMaterials[k]].Kd.map((v) => Math.round(255 * v)).join(",")})`}))),
+      Plot.line(signParsed.triangles.flatMap((tri, k) => [...tri.corners, tri.corners[0]].map((c) => ({k, x: positions[c.p][0], y: positions[c.p][1],
+        color: `rgb(${signMTL[tri.material].Kd.map((v) => Math.round(255 * v)).join(",")})`}))),
         {x: "x", y: "y", z: "k", stroke: "color"}),
       Plot.dot([{x: 0, y: 0}], {x: "x", y: "y", fill: "crimson", r: 4})
     ]

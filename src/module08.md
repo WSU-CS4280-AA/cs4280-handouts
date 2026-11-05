@@ -5,11 +5,13 @@ toc: true
 
 ```js echo
 import * as d3 from "npm:d3";
-import * as mat4 from "./components/mat4.js";
+import * as mat4 from "./lib/math/mat4.js";
+import * as transforms from "./lib/math/transforms.js";
 import * as geometry from "./components/geometry.js";
-import * as obj from "./components/obj.js";
-import * as webgpu from "./components/webgpu.js";
-import {Mesh} from "./components/lib/webgpu.js";
+import * as obj from "./lib/obj-mtl.js";
+import * as objMesh from "./components/objMesh.js";
+import * as mipmaps from "./components/mipmaps.js";
+import {initializeWebGPU, createBuffer, Mesh} from "./lib/webgpu.js";
 import * as raster from "./components/raster.js";
 import * as Inputs from "npm:@observablehq/inputs";
 import {html} from "npm:htl";
@@ -33,8 +35,7 @@ are explained in the last section. This handout teaches the *techniques*;
 it is not a walkthrough of any graded assignment.
 
 ```js echo
-const {adapter, device} = await webgpu.requestDevice();
-const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
+const {device, format: canvasFormat} = await initializeWebGPU(document.createElement("canvas"));   // a blank canvas: each demo adds its own below
 
 const deviceErrorLog = document.createElement("pre");
 deviceErrorLog.style.cssText = "display: none; color: #e5484d; background: #2a1214; border: 1px solid #e5484d; border-radius: 6px; padding: 8px 12px; font-size: 12px; white-space: pre-wrap;";
@@ -43,25 +44,11 @@ device.addEventListener("uncapturederror", (event) => {
   deviceErrorLog.style.display = "block";
 });
 
-function makeVertexBuffer(data) {
-  const buffer = device.createBuffer({size: data.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST, mappedAtCreation: true});
-  new Float32Array(buffer.getMappedRange()).set(data);
-  buffer.unmap();
-  return buffer;
-}
-function makeIndexBuffer(data) {
-  const padded = new Uint16Array(Math.ceil(data.length / 2) * 2);   // keep the size a multiple of 4 bytes
-  padded.set(data);
-  const buffer = device.createBuffer({size: padded.byteLength, usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST, mappedAtCreation: true});
-  new Uint16Array(buffer.getMappedRange()).set(padded);
-  buffer.unmap();
-  return buffer;
-}
-function makeCanvas(size) {
+async function makeCanvas(size) {
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = size;
   canvas.style.borderRadius = "8px";
-  const {context} = webgpu.configureCanvas(canvas, device);
+  const {context} = await initializeWebGPU(canvas, {device});
   const depthTexture = device.createTexture({size: [size, size], format: "depth24plus", usage: GPUTextureUsage.RENDER_ATTACHMENT});
   return {canvas, context, depthTexture};
 }
@@ -255,8 +242,8 @@ once with plain screen-space interpolation and once perspective-correct:
 
 ```js echo
 function rasterizeQuad(size, {perspectiveCorrect, tilt}) {
-  const view = mat4.lookAt([0, 1.2 + tilt, -0.2], [0, 0, 3], [0, 1, 0]);
-  const mvp = mat4.multiply(mat4.perspective(1.0, 1, 0.1, 20), view);
+  const view = transforms.lookAt([0, 1.2 + tilt, -0.2], [0, 0, 3], [0, 1, 0]);
+  const mvp = mat4.multiply(transforms.perspective(1.0, 1, 0.1, 20), view);
   const corners = [[-1.5, 0, 0.5, 0, 0], [1.5, 0, 0.5, 1, 0], [1.5, 0, 5, 1, 1], [-1.5, 0, 5, 0, 1]];
   const verts = corners.map(([x, y, z, u, v]) => {
     const c = mat4.transformPoint(mvp, [x, y, z]);
@@ -389,13 +376,13 @@ const checkerPipeline = device.createRenderPipeline({
   depthStencil: {format: "depth24plus", depthWriteEnabled: true, depthCompare: "less"}
 });
 const uvSphere = geometry.createSphere(24, 32);   // createSphere duplicates the seam column (lon = 0 and lon = 32)
-const uvSphereVB = makeVertexBuffer(geometry.interleave(uvSphere.positions, uvSphere.normals, uvSphere.uvs));
-const uvSphereIB = makeIndexBuffer(uvSphere.indices);
+const uvSphereVB = createBuffer(device, geometry.interleave(uvSphere.positions, uvSphere.normals, uvSphere.uvs), GPUBufferUsage.VERTEX);
+const uvSphereIB = createBuffer(device, uvSphere.indices, GPUBufferUsage.INDEX);
 // The same triangles, but the last column reuses the first column's vertices (u = 0) instead of the duplicates (u = 1).
-const sharedSeamIB = makeIndexBuffer(uvSphere.indices.map((i) => (i % 33 === 32 ? i - 32 : i)));
+const sharedSeamIB = createBuffer(device, uvSphere.indices.map((i) => (i % 33 === 32 ? i - 32 : i)), GPUBufferUsage.INDEX);
 const checkerUniforms = device.createBuffer({size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
 const checkerBindGroup = device.createBindGroup({layout: checkerPipeline.getBindGroupLayout(0), entries: [{binding: 0, resource: {buffer: checkerUniforms}}]});
-const checkerTarget = makeCanvas(300);
+const checkerTarget = await makeCanvas(300);
 ```
 
 ```js echo
@@ -409,7 +396,7 @@ const seamForm = view(Inputs.form({
 
 ```js echo
 {
-  const mvp = mat4.multiply(mat4.perspective(0.73, 1, 0.1, 20), mat4.lookAt(orbitEye(seamForm.azimuth, seamForm.elevation, 3.2), [0, 0, 0], [0, 1, 0]));
+  const mvp = mat4.multiply(transforms.perspective(0.73, 1, 0.1, 20), transforms.lookAt(orbitEye(seamForm.azimuth, seamForm.elevation, 3.2), [0, 0, 0], [0, 1, 0]));
   device.queue.writeBuffer(checkerUniforms, 0, new Float32Array([...mvp, seamForm.density, 0, 0, 0]));
   renderPass(checkerTarget, (pass) => {
     pass.setPipeline(checkerPipeline);
@@ -839,8 +826,8 @@ does not stretch them.
 A texture is a `GPUTexture` with a format, a size, and a number of mip
 levels. Every color texture on this page uses `rgba8unorm`: four 8-bit
 channels, read in the shader as values from 0 to 1. WebGPU has **no
-built-in mipmap generator**: `webgpu.generateMipCanvases` builds the levels on the CPU by repeatedly
-halving a canvas, and `webgpu.textureFromMipCanvases` copies each level
+built-in mipmap generator**: `mipmaps.generateMipCanvases` builds the levels on the CPU by repeatedly
+halving a canvas, and `mipmaps.textureFromMipCanvases` copies each level
 in with `copyExternalImageToTexture`. (Production code fills levels with
 a short render pass per level that averages the level below.)
 
@@ -860,7 +847,7 @@ function makeCheckerCanvas(size, cells) {
   }
   return canvas;
 }
-const floorTexture = webgpu.textureFromMipCanvases(device, webgpu.generateMipCanvases(makeCheckerCanvas(256, 16)), {label: "floor checker"});
+const floorTexture = mipmaps.textureFromMipCanvases(device, mipmaps.generateMipCanvases(makeCheckerCanvas(256, 16)), {label: "floor checker"});
 
 // A texture whose mip levels are painted solid, different colors, to make level selection visible.
 const levelColors = [[255, 255, 255], [230, 60, 60], [240, 160, 40], [240, 230, 60], [80, 200, 90], [60, 170, 220], [70, 90, 220], [150, 80, 200], [40, 40, 40]];
@@ -892,10 +879,10 @@ The same floor (repeating the checker 6 × 16 times) is drawn with four
 samplers, plus the level-colored texture:
 
 ```js echo
-const floorVB = makeVertexBuffer(new Float32Array([
+const floorVB = createBuffer(device, new Float32Array([
   -4, 0, 0.5, 0, 0,   4, 0, 0.5, 6, 0,   4, 0, 14, 6, 16,
   -4, 0, 0.5, 0, 0,   4, 0, 14, 6, 16,  -4, 0, 14, 0, 16
-]));
+]), GPUBufferUsage.VERTEX);
 const floorModule = device.createShaderModule({code: `
 @group(0) @binding(0) var<uniform> mvp: mat4x4<f32>;
 @group(0) @binding(1) var tex: texture_2d<f32>;
@@ -925,19 +912,19 @@ const floorPipeline = device.createRenderPipeline({
 });
 const floorMVPBuffer = device.createBuffer({size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
 const repeat = {addressModeU: "repeat", addressModeV: "repeat"};
-const floorVariants = [
+const floorVariants = await Promise.all([
   ["point sampling, level 0 only", floorTexture, {magFilter: "nearest", minFilter: "nearest", mipmapFilter: "nearest", lodMaxClamp: 0, ...repeat}],
   ["bilinear, no mipmaps", floorTexture, {magFilter: "linear", minFilter: "linear", lodMaxClamp: 0, ...repeat}],
   ["trilinear", floorTexture, {magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", ...repeat}],
   ["trilinear + anisotropic (16×)", floorTexture, {magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", maxAnisotropy: 16, ...repeat}],
   ["which level? (trilinear)", levelTexture, {magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", ...repeat}],
   ["which level? (anisotropic)", levelTexture, {magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", maxAnisotropy: 16, ...repeat}]
-].map(([label, texture, samplerDesc]) => ({
-  label, target: makeCanvas(240),
+].map(async ([label, texture, samplerDesc]) => ({
+  label, target: await makeCanvas(240),
   bindGroup: device.createBindGroup({layout: floorPipeline.getBindGroupLayout(0), entries: [
     {binding: 0, resource: {buffer: floorMVPBuffer}}, {binding: 1, resource: texture.createView()},
     {binding: 2, resource: device.createSampler(samplerDesc)}]})
-}));
+})));
 ```
 
 ```js echo
@@ -946,7 +933,7 @@ const floorHeight = view(Inputs.range([0.2, 3], {value: 1.1, step: 0.05, label: 
 
 ```js echo
 {
-  device.queue.writeBuffer(floorMVPBuffer, 0, mat4.multiply(mat4.perspective(0.87, 1, 0.1, 30), mat4.lookAt([0, floorHeight, -2.4], [0, 0, 9], [0, 1, 0])));
+  device.queue.writeBuffer(floorMVPBuffer, 0, mat4.multiply(transforms.perspective(0.87, 1, 0.1, 30), transforms.lookAt([0, floorHeight, -2.4], [0, 0, 9], [0, 1, 0])));
   for (const {target, bindGroup} of floorVariants) {
     renderPass(target, (pass) => { pass.setPipeline(floorPipeline); pass.setBindGroup(0, bindGroup); pass.setVertexBuffer(0, floorVB); pass.draw(6); });
   }
@@ -1054,7 +1041,7 @@ map_Kd shingles.png
 `;
 ```
 
-**Step 1: parse the text.** `obj.parseOBJ` (in `components/obj.js`)
+**Step 1: parse the text.** `obj.parseOBJ` (in `lib/obj-mtl.js`)
 reads the file line by line. `v`, `vt`, and `vn` lines are appended to
 three separate lists. Each `f` corner such as `6/4/2` becomes
 `{p: 5, t: 3, n: 1}`, with 1 subtracted from every index. A polygon with
@@ -1072,12 +1059,12 @@ The first `f` line, a quad, became the first two triangles. Note the
 0-based indices and the shared corner ${tex`c_0`}:
 
 ```js echo
-Inputs.table(hutParsed.faces.slice(0, 2).flatMap((tri, k) => tri.map((c, j) => ({
-  triangle: k, corner: j, "position p": c.p, "texcoord t": c.t, "normal n": c.n, material: hutParsed.faceMaterials[k]
+Inputs.table(hutParsed.triangles.slice(0, 2).flatMap((tri, k) => tri.corners.map((c, j) => ({
+  triangle: k, corner: j, "position p": c.p, "texcoord t": c.t, "normal n": c.n, material: tri.material
 }))))
 ```
 
-**Step 2: one GPU vertex per distinct `p/t/n`.** `obj.buildIndexedMesh`
+**Step 2: one GPU vertex per distinct `p/t/n`.** `objMesh.buildIndexedMesh`
 walks every triangle corner and builds the key `"p,n,t"`. The first time
 a key appears, it creates a new GPU vertex holding that position,
 normal, and UV, and remembers its index in a `Map`. Every later corner
@@ -1091,8 +1078,8 @@ are the **seams** from earlier in this module: wherever the texture
 coordinates (or the normals) are discontinuous, vertices are duplicated.
 
 ```js echo
-const hutGroups = [...obj.groupFacesByMaterial(hutParsed)].map(([name, faces]) => ({
-  name, material: hutMTL[name], ...obj.buildIndexedMesh(hutParsed, faces)
+const hutGroups = [...objMesh.groupTrianglesByMaterial(hutParsed.triangles)].map(([name, triangles]) => ({
+  name, material: hutMTL[name], ...objMesh.buildIndexedMesh(hutParsed, triangles)
 }));
 ```
 
@@ -1181,7 +1168,7 @@ function packVertices(positions, normals, uvs) {
   const data = new Float32Array(positions.length * VERTEX_FLOATS);
   positions.forEach((p, i) => {
     const n = normals[i], uv = uvs[i];
-    data.set([p.x, p.y, p.z, n.x, n.y, n.z, uv.u, uv.v], i * VERTEX_FLOATS);
+    data.set([...p, ...n, ...uv], i * VERTEX_FLOATS);
   });
   return data;
 }
@@ -1226,8 +1213,8 @@ const modelSampler = device.createSampler({magFilter: "linear", minFilter: "line
 **Step 5: one draw per material.** Each `usemtl` group becomes a
 **part**: its geometry, a uniform buffer (its matrix and `Kd`), and a
 bind group that points at its texture. The geometry is a `Mesh` from
-the course library, `reference/src/lib/webgpu.js` (copied into
-`components/lib/webgpu.js`), the same one the assignments use.
+the course library, `lib/webgpu.js`, the same file as `src/lib/webgpu.js` in the starter
+repository that the activities and assignments use.
 `new Mesh(device, {vertices, indices})` uploads both buffers, and
 `mesh.draw(pass)` binds them and calls `drawIndexed` with the right
 count and index format.
@@ -1264,7 +1251,7 @@ function drawModel(target, parts, mvp) {
 const hutParts = hutGroups.map((g) => makeModelPart({
   vertices: packVertices(g.positions, g.normals, g.uvs), indices: g.indices, material: g.material
 }));
-const hutModelTarget = makeCanvas(300);
+const hutModelTarget = await makeCanvas(300);
 ```
 
 ```js echo
@@ -1273,7 +1260,7 @@ const hutModelAzimuth = view(Inputs.range([-180, 180], {value: 40, step: 1, labe
 
 ```js echo
 drawModel(hutModelTarget, hutParts,
-  mat4.multiply(mat4.perspective(0.7, 1, 0.1, 30), mat4.lookAt(orbitEye(hutModelAzimuth, 25, 5.2, [0, 1, 0]), [0, 1, 0], [0, 1, 0])));
+  mat4.multiply(transforms.perspective(0.7, 1, 0.1, 30), transforms.lookAt(orbitEye(hutModelAzimuth, 25, 5.2, [0, 1, 0]), [0, 1, 0], [0, 1, 0])));
 ```
 
 ```js echo
@@ -1300,7 +1287,7 @@ textureSample(tex, samp, uv, layer)   // layer: an i32 or u32 index
 Every layer must have the **same size, format, and number of mip
 levels**. The planks and shingles are both 128 × 128, so they can be
 the two layers. The mipmaps are built on the CPU, as before:
-`webgpu.generateMipCanvases` halves each canvas down to 1 × 1, and
+`mipmaps.generateMipCanvases` halves each canvas down to 1 × 1, and
 every level of every layer is copied in. `origin: [0, 0, layer]` picks
 the layer, and `mipLevel` picks the level. (The cube texture later in
 this module is filled the same way: a cube is six layers with a
@@ -1308,7 +1295,7 @@ different view.)
 
 ```js echo
 const layerCanvases = [plankCanvas, shingleCanvas];             // layer 0, layer 1
-const layerMips = layerCanvases.map((c) => webgpu.generateMipCanvases(c));
+const layerMips = layerCanvases.map((c) => mipmaps.generateMipCanvases(c));
 
 const materialArray = device.createTexture({
   size: [128, 128, layerCanvases.length],                      // width, height, layers
@@ -1401,7 +1388,7 @@ const hutArrayParts = hutParts.map((part, i) => {
       {binding: 2, resource: arraySampler}]})
   };
 });
-const arrayTarget = makeCanvas(300);
+const arrayTarget = await makeCanvas(300);
 ```
 
 ```js echo
@@ -1417,7 +1404,7 @@ the layer:
 
 ```js echo
 {
-  const mvp = mat4.multiply(mat4.perspective(0.7, 1, 0.1, 30), mat4.lookAt(orbitEye(arrayForm.azimuth, 25, 5.2, [0, 1, 0]), [0, 1, 0], [0, 1, 0]));
+  const mvp = mat4.multiply(transforms.perspective(0.7, 1, 0.1, 30), transforms.lookAt(orbitEye(arrayForm.azimuth, 25, 5.2, [0, 1, 0]), [0, 1, 0], [0, 1, 0]));
   for (const part of hutArrayParts) {
     const data = new ArrayBuffer(ARRAY_UNIFORM_BYTES);
     new Float32Array(data, 0, 20).set([...mvp, ...part.kd, 1]);                          // mvp, kd
@@ -1453,7 +1440,7 @@ tangent.
 
 For normal mapping, build the frame ${tex`[\mathbf T\ \mathbf B\ \mathbf N]`}
 at each fragment, decode ${tex`\mathbf n = 2\mathbf c - 1`}, and rotate it
-into world space. `obj.computeTangents` computes the per-vertex tangent
+into world space. `objMesh.computeTangents` computes the per-vertex tangent
 ${tex`\mathbf T`} (the direction of increasing ${tex`u`}) from each
 triangle's positions and UVs. The shader takes
 ${tex`\mathbf B = \mathbf N \times \mathbf T`}, which is right only if the
@@ -1465,8 +1452,8 @@ the tangent's fourth component.) We reuse the hut and its plank texture
 from the OBJ section, this time as one indexed mesh:
 
 ```js echo
-const hutMesh = obj.buildIndexedMesh(hutParsed, hutParsed.faces);
-const hutTangents = obj.computeTangents(hutMesh.positions, hutMesh.uvs, hutMesh.indices);
+const hutMesh = objMesh.buildIndexedMesh(hutParsed, hutParsed.triangles);
+const hutTangents = objMesh.computeTangents(hutMesh.positions, hutMesh.uvs, hutMesh.indices);
 
 // The normal map derived from the planks' groove height field.
 const plankHeight = (u, v) => { const l = (v * 6) % 1; return Math.max(0, 0.4 - Math.min(l, 1 - l) * 4); };
@@ -1479,10 +1466,9 @@ const hutSampler = device.createSampler({magFilter: "linear", minFilter: "linear
 const hutData = new Float32Array(hutMesh.positions.length * 11);
 hutMesh.positions.forEach((p, i) => {
   const n = hutMesh.normals[i], uv = hutMesh.uvs[i], t = hutTangents[i];
-  hutData.set([p.x, p.y, p.z, n.x, n.y, n.z, uv.u, uv.v, t.x, t.y, t.z], i * 11);
+  hutData.set([...p, ...n, ...uv, ...t], i * 11);
 });
-const hutVB = makeVertexBuffer(hutData);
-const hutIB = makeIndexBuffer(hutMesh.indices);
+const hutGPUMesh = new Mesh(device, {vertices: hutData, indices: hutMesh.indices});
 
 const hutModule = device.createShaderModule({code: `
 struct Uniforms { mvp: mat4x4<f32>, params: vec4<f32> };
@@ -1532,7 +1518,7 @@ const hutUniforms = device.createBuffer({size: 80, usage: GPUBufferUsage.UNIFORM
 const hutBindGroup = device.createBindGroup({layout: hutPipeline.getBindGroupLayout(0), entries: [
   {binding: 0, resource: {buffer: hutUniforms}}, {binding: 1, resource: hutAlbedo.createView()},
   {binding: 2, resource: hutNormalMap.createView()}, {binding: 3, resource: hutSampler}]});
-const hutTarget = makeCanvas(300);
+const hutTarget = await makeCanvas(300);
 ```
 
 ```js echo
@@ -1544,11 +1530,11 @@ const hutForm = view(Inputs.form({
 
 ```js echo
 {
-  const mvp = mat4.multiply(mat4.perspective(0.7, 1, 0.1, 30), mat4.lookAt(orbitEye(hutForm.azimuth, 25, 5.2, [0, 1, 0]), [0, 1, 0], [0, 1, 0]));
+  const mvp = mat4.multiply(transforms.perspective(0.7, 1, 0.1, 30), transforms.lookAt(orbitEye(hutForm.azimuth, 25, 5.2, [0, 1, 0]), [0, 1, 0], [0, 1, 0]));
   device.queue.writeBuffer(hutUniforms, 0, new Float32Array([...mvp, hutForm.normalMap ? 1 : 0, 0, 0, 0]));
   renderPass(hutTarget, (pass) => {
     pass.setPipeline(hutPipeline); pass.setBindGroup(0, hutBindGroup);
-    pass.setVertexBuffer(0, hutVB); pass.setIndexBuffer(hutIB, "uint16"); pass.drawIndexed(hutMesh.indices.length);
+    hutGPUMesh.draw(pass);
   });
 }
 ```
@@ -1623,13 +1609,12 @@ const envPipeline = device.createRenderPipeline({
   depthStencil: {format: "depth24plus", depthWriteEnabled: true, depthCompare: "less"}
 });
 const envSphere = geometry.createSphere(40, 56);
-const envVB = makeVertexBuffer(geometry.interleave(envSphere.positions, envSphere.normals));
-const envIB = makeIndexBuffer(envSphere.indices);
+const envMesh = new Mesh(device, {vertices: geometry.interleave(envSphere.positions, envSphere.normals), indices: envSphere.indices});
 const envUniforms = device.createBuffer({size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
 const envBindGroup = device.createBindGroup({layout: envPipeline.getBindGroupLayout(0), entries: [
   {binding: 0, resource: {buffer: envUniforms}}, {binding: 1, resource: envTexture.createView({dimension: "cube"})},
   {binding: 2, resource: device.createSampler({magFilter: "linear", minFilter: "linear"})}]});
-const envTarget = makeCanvas(300);
+const envTarget = await makeCanvas(300);
 ```
 
 ```js echo
@@ -1643,11 +1628,11 @@ const envForm = view(Inputs.form({
 ```js echo
 {
   const eye = orbitEye(envForm.azimuth, envForm.elevation, 3);
-  const mvp = mat4.multiply(mat4.perspective(0.8, 1, 0.1, 20), mat4.lookAt(eye, [0, 0, 0], [0, 1, 0]));
+  const mvp = mat4.multiply(transforms.perspective(0.8, 1, 0.1, 20), transforms.lookAt(eye, [0, 0, 0], [0, 1, 0]));
   device.queue.writeBuffer(envUniforms, 0, new Float32Array([...mvp, ...eye, 1, envForm.through ? 1 : 0, 0, 0, 0]));
   renderPass(envTarget, (pass) => {
     pass.setPipeline(envPipeline); pass.setBindGroup(0, envBindGroup);
-    pass.setVertexBuffer(0, envVB); pass.setIndexBuffer(envIB, "uint16"); pass.drawIndexed(envSphere.indices.length);
+    envMesh.draw(pass);
   });
 }
 ```
@@ -1779,16 +1764,16 @@ const boxMesh = (() => {
 })();
 const shadowSphere = geometry.createSphere(24, 32);
 const sceneObjects = [
-  {mesh: boxMesh, model: mat4.multiply(mat4.translate(0, -0.05, 0), mat4.scale(4, 0.05, 4)), color: [0.75, 0.75, 0.72]},
-  {mesh: shadowSphere, model: mat4.multiply(mat4.translate(-0.9, 0.7, 0.3), mat4.scale(0.7, 0.7, 0.7)), color: [0.85, 0.35, 0.25]},
-  {mesh: boxMesh, model: mat4.multiply(mat4.translate(1.0, 0.55, -0.6), mat4.multiply(mat4.rotateY(0.6), mat4.scale(0.45, 0.55, 0.45))), color: [0.25, 0.45, 0.8]}
+  {mesh: boxMesh, model: mat4.multiply(transforms.translate(0, -0.05, 0), transforms.scale(4, 0.05, 4)), color: [0.75, 0.75, 0.72]},
+  {mesh: shadowSphere, model: mat4.multiply(transforms.translate(-0.9, 0.7, 0.3), transforms.scale(0.7, 0.7, 0.7)), color: [0.85, 0.35, 0.25]},
+  {mesh: boxMesh, model: mat4.multiply(transforms.translate(1.0, 0.55, -0.6), mat4.multiply(transforms.rotateY(0.6), transforms.scale(0.45, 0.55, 0.45))), color: [0.25, 0.45, 0.8]}
 ].map((o) => {
   const uniforms = device.createBuffer({size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
   device.queue.writeBuffer(uniforms, 0, new Float32Array([...o.model, ...o.color, 1]));
-  return {...o, vb: makeVertexBuffer(geometry.interleave(o.mesh.positions, o.mesh.normals)), ib: makeIndexBuffer(o.mesh.indices),
+  return {...o, gpuMesh: new Mesh(device, {vertices: geometry.interleave(o.mesh.positions, o.mesh.normals), indices: o.mesh.indices}),
     bindGroup: device.createBindGroup({layout: objectLayout, entries: [{binding: 0, resource: {buffer: uniforms}}]})};
 });
-const shadowTarget = makeCanvas(340);
+const shadowTarget = await makeCanvas(340);
 ```
 
 ```js echo
@@ -1804,8 +1789,8 @@ const shadowForm = view(Inputs.form({
 {
   const lightPos = orbitEye(shadowForm.azimuth, shadowForm.elevation, 8);
   const lightDir = lightPos.map((c) => -c / Math.hypot(...lightPos));       // direction the light travels
-  const lightVP = mat4.multiply(mat4.ortho(-4.5, 4.5, -4.5, 4.5, 1, 16), mat4.lookAt(lightPos, [0, 0, 0], [0, 1, 0]));
-  const camVP = mat4.multiply(mat4.perspective(0.8, 1, 0.1, 40), mat4.lookAt([3.2, 4.2, 6.5], [0, 0.3, 0], [0, 1, 0]));
+  const lightVP = mat4.multiply(transforms.ortho(-4.5, 4.5, -4.5, 4.5, 1, 16), transforms.lookAt(lightPos, [0, 0, 0], [0, 1, 0]));
+  const camVP = mat4.multiply(transforms.perspective(0.8, 1, 0.1, 40), transforms.lookAt([3.2, 4.2, 6.5], [0, 0.3, 0], [0, 1, 0]));
   device.queue.writeBuffer(sceneUniforms, 0, new Float32Array([...camVP, ...lightVP, ...lightDir, 0, shadowForm.bias, shadowForm.pcf ? 1 : 0, 1 / SHADOW_SIZE, 0]));
 
   const encoder = device.createCommandEncoder();
@@ -1815,8 +1800,8 @@ const shadowForm = view(Inputs.form({
   depthPass.setPipeline(depthPipeline);
   depthPass.setBindGroup(0, sceneBindGroup);
   for (const o of sceneObjects) {
-    depthPass.setBindGroup(1, o.bindGroup); depthPass.setVertexBuffer(0, o.vb); depthPass.setIndexBuffer(o.ib, "uint16");
-    depthPass.drawIndexed(o.mesh.indices.length);
+    depthPass.setBindGroup(1, o.bindGroup);
+    o.gpuMesh.draw(depthPass);
   }
   depthPass.end();
   // Pass 2: render from the camera, reading the shadow map.
@@ -1827,8 +1812,8 @@ const shadowForm = view(Inputs.form({
   mainPass.setBindGroup(0, sceneBindGroup);
   mainPass.setBindGroup(2, shadowBindGroup);
   for (const o of sceneObjects) {
-    mainPass.setBindGroup(1, o.bindGroup); mainPass.setVertexBuffer(0, o.vb); mainPass.setIndexBuffer(o.ib, "uint16");
-    mainPass.drawIndexed(o.mesh.indices.length);
+    mainPass.setBindGroup(1, o.bindGroup);
+    o.gpuMesh.draw(mainPass);
   }
   mainPass.end();
   device.queue.submit([encoder.finish()]);

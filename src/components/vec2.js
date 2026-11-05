@@ -49,7 +49,3 @@ export function angleBetween(a, b) {
 export function projectOnto(a, b) {
   return scale(b, dot(a, b) / dot(b, b));
 }
-
-export function lerp(a, b, t) {
-  return {x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t};
-}

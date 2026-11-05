@@ -6,9 +6,10 @@ toc: true
 ```js echo
 import * as vec2 from "./components/vec2.js";
 import * as mat2 from "./components/mat2.js";
-import * as mat4 from "./components/mat4.js";
+import * as mat4 from "./lib/math/mat4.js";
+import * as transforms from "./lib/math/transforms.js";
 import * as geometry from "./components/geometry.js";
-import * as webgpu from "./components/webgpu.js";
+import {initializeWebGPU, createBuffer} from "./lib/webgpu.js";
 import {plane, drawArrow, dragVectors} from "./components/vectorField.js";
 import * as Inputs from "npm:@observablehq/inputs";
 import {html} from "npm:htl";
@@ -32,8 +33,20 @@ equation. The page requests a GPU device at the top and needs **Chrome
 or Edge 113+**. This handout teaches the *techniques* behind the module;
 it is not a walkthrough of any graded assignment.
 
+Module 04 wrote every WebGPU step out by hand. From here on, the setup and
+data uploads use the course library, `lib/webgpu.js`, the same file as
+`src/lib/webgpu.js` in the starter repository that the activities and
+assignments use:
+
+- `initializeWebGPU(canvas)` requests the adapter and device and configures
+  the canvas. It takes a canvas or a canvas ID. Passing `{device}` reuses a
+  device, so all the canvases on a page can share one.
+- `createBuffer(device, data, usage)` creates a buffer of the right size, adds
+  `COPY_DST`, and writes `data` into it. Buffers that start empty, such as
+  uniforms filled in later, still use `device.createBuffer`.
+
 ```js echo
-const {adapter, device} = await webgpu.requestDevice();
+const {device, format: canvasFormat} = await initializeWebGPU(document.createElement("canvas"));   // a blank canvas: each demo adds its own below
 ```
 
 Most WebGPU mistakes, such as a bad buffer size or a bind group that
@@ -317,7 +330,7 @@ const gasketCanvas = document.createElement("canvas");
 gasketCanvas.width = 420;
 gasketCanvas.height = 420;
 gasketCanvas.style.borderRadius = "8px";
-const {context: gasketContext, format: gasketFormat} = webgpu.configureCanvas(gasketCanvas, device);
+const {context: gasketContext, format: gasketFormat} = await initializeWebGPU(gasketCanvas, {device});
 
 const gasketShaderModule = device.createShaderModule({code: gasketShaderSource});
 const gasketPipeline = device.createRenderPipeline({
@@ -341,13 +354,7 @@ const gasketForm = view(Inputs.form({
 ```js echo
 const gasketCorners = [[0, 0.85], [-0.85, -0.7], [0.85, -0.7]];
 const gasketPointData = sierpinskiPoints(gasketForm.iterations, gasketCorners);
-const gasketVertexBuffer = device.createBuffer({
-  size: gasketPointData.byteLength,
-  usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-  mappedAtCreation: true
-});
-new Float32Array(gasketVertexBuffer.getMappedRange()).set(gasketPointData);
-gasketVertexBuffer.unmap();
+const gasketVertexBuffer = createBuffer(device, gasketPointData, GPUBufferUsage.VERTEX);
 ```
 
 ```js echo
@@ -398,22 +405,10 @@ const sphereFlat = geometry.flatten(sphereSmooth);
 const smoothVertexData = geometry.interleave(sphereSmooth.positions, sphereSmooth.normals);
 const flatVertexData = geometry.interleave(sphereFlat.positions, sphereFlat.normals);
 
-function makeVertexBuffer(data) {
-  const buffer = device.createBuffer({size: data.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST, mappedAtCreation: true});
-  new Float32Array(buffer.getMappedRange()).set(data);
-  buffer.unmap();
-  return buffer;
-}
-function makeIndexBuffer(data) {
-  const buffer = device.createBuffer({size: data.byteLength, usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST, mappedAtCreation: true});
-  new Uint16Array(buffer.getMappedRange()).set(data);
-  buffer.unmap();
-  return buffer;
-}
 
-const smoothVertexBuffer = makeVertexBuffer(smoothVertexData);
-const smoothIndexBuffer = makeIndexBuffer(sphereSmooth.indices);
-const flatVertexBuffer = makeVertexBuffer(flatVertexData);
+const smoothVertexBuffer = createBuffer(device, smoothVertexData, GPUBufferUsage.VERTEX);
+const smoothIndexBuffer = createBuffer(device, sphereSmooth.indices, GPUBufferUsage.INDEX);
+const flatVertexBuffer = createBuffer(device, flatVertexData, GPUBufferUsage.VERTEX);
 const flatVertexCount = sphereFlat.positions.length / 3;
 ```
 
@@ -422,8 +417,8 @@ inverse-transpose from the normals section, since this sphere never
 scales non-uniformly:
 
 ```js echo
-const sphereView = mat4.lookAt([2.4, 1.7, 3.2], [0, 0, 0], [0, 1, 0]);
-const sphereProjection = mat4.perspective((42 * Math.PI) / 180, 1, 0.1, 20);
+const sphereView = transforms.lookAt([2.4, 1.7, 3.2], [0, 0, 0], [0, 1, 0]);
+const sphereProjection = transforms.perspective((42 * Math.PI) / 180, 1, 0.1, 20);
 const sphereModel = mat4.identity();
 const sphereMVP = mat4.multiplyAll([sphereProjection, sphereView, sphereModel]);
 
@@ -558,19 +553,19 @@ function makePipeline(source, canvasFormat, cullMode = "back") {
   });
 }
 
-function makeCanvas(size) {
+async function makeCanvas(size) {
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
   canvas.style.borderRadius = "8px";
-  const {context, format} = webgpu.configureCanvas(canvas, device);
+  const {context, format} = await initializeWebGPU(canvas, {device});
   const depthTexture = device.createTexture({size: [size, size], format: "depth24plus", usage: GPUTextureUsage.RENDER_ATTACHMENT});
   return {canvas, context, format, depthTexture};
 }
 
-const flatTarget = makeCanvas(240);
-const gouraudTarget = makeCanvas(240);
-const phongTarget = makeCanvas(240);
+const flatTarget = await makeCanvas(240);
+const gouraudTarget = await makeCanvas(240);
+const phongTarget = await makeCanvas(240);
 
 const vertexLitPipeline = makePipeline(vertexLitSource, flatTarget.format);
 const phongPipeline = makePipeline(fragmentLitSource, phongTarget.format);

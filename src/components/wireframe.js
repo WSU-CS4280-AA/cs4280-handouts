@@ -3,7 +3,7 @@
 // a plain <canvas>. No WebGPU, no hidden-surface removal, no shading —
 // just the geometry pipeline itself, made visible.
 
-import * as mat4 from "./mat4.js";
+import * as mat4 from "../lib/math/mat4.js";
 
 export const cubeVertices = [
   {x: -1, y: -1, z: -1}, {x: 1, y: -1, z: -1}, {x: 1, y: 1, z: -1}, {x: -1, y: 1, z: -1},

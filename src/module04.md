@@ -4,8 +4,8 @@ toc: true
 ---
 
 ```js echo
-import * as mat4 from "./components/mat4.js";
-import * as webgpu from "./components/webgpu.js";
+import * as mat4 from "./lib/math/mat4.js";
+import * as transforms from "./lib/math/transforms.js";
 import * as Inputs from "npm:@observablehq/inputs";
 import {html} from "npm:htl";
 ```
@@ -82,7 +82,10 @@ and a logical **device** connected to it. This is not a simulated
 example; it queries *your* browser and hardware:
 
 ```js echo
-const {adapter, device} = await webgpu.requestDevice();
+if (!navigator.gpu) throw new Error("WebGPU is not supported in this browser.");
+const adapter = await navigator.gpu.requestAdapter();
+if (!adapter) throw new Error("No suitable GPU adapter found.");
+const device = await adapter.requestDevice();
 ```
 
 ```js echo
@@ -245,7 +248,9 @@ const triangleCanvas = document.createElement("canvas");
 triangleCanvas.width = 400;
 triangleCanvas.height = 300;
 triangleCanvas.style.borderRadius = "8px";
-const {context: triangleContext, format: triangleFormat} = webgpu.configureCanvas(triangleCanvas, device);
+const triangleContext = triangleCanvas.getContext("webgpu");
+const triangleFormat = navigator.gpu.getPreferredCanvasFormat();
+triangleContext.configure({device, format: triangleFormat, alphaMode: "opaque"});
 const pipeline = device.createRenderPipeline({
   layout: "auto",
   vertex: {
@@ -297,7 +302,7 @@ object traces back to the pipeline diagram or the resource table above.
 
 The next step is a **uniform**: data shared by every invocation in a
 draw call, bound through a `@group`/`@binding` pair. Here it is the kind
-of matrix Module 03 built, with `mat4.js`'s `translate`, `rotateZ`, and
+of matrix Module 03 built, with `transforms.js`'s `translate`, `rotateZ`, and
 `scale` composed and uploaded as a WGSL `mat4x4<f32>`. The shader changes
 by one line, and the rest of the pipeline keeps the same shape as the
 triangle's.
@@ -354,7 +359,9 @@ const xformCanvas = document.createElement("canvas");
 xformCanvas.width = 320;
 xformCanvas.height = 320;
 xformCanvas.style.borderRadius = "8px";
-const {context: xformContext, format: xformFormat} = webgpu.configureCanvas(xformCanvas, device);
+const xformContext = xformCanvas.getContext("webgpu");
+const xformFormat = navigator.gpu.getPreferredCanvasFormat();
+xformContext.configure({device, format: xformFormat, alphaMode: "opaque"});
 const xformShaderModule = device.createShaderModule({code: xformShaderSource});
 const xformPipeline = device.createRenderPipeline({
   layout: "auto",
@@ -418,9 +425,9 @@ const xformForm = view(Inputs.form({
 
 ```js echo
 const xformMatrix = mat4.multiplyAll([
-  mat4.translate(xformForm.tx, xformForm.ty, 0),
-  mat4.rotateZ((xformForm.rotate * Math.PI) / 180),
-  mat4.scale(xformForm.scale, xformForm.scale, 1)
+  transforms.translate(xformForm.tx, xformForm.ty, 0),
+  transforms.rotateZ((xformForm.rotate * Math.PI) / 180),
+  transforms.scale(xformForm.scale, xformForm.scale, 1)
 ]);
 device.queue.writeBuffer(uniformBuffer, 0, xformMatrix);
 drawTransformed();

@@ -178,42 +178,6 @@ export function mapPixels(imageData, fn) {
   return out;
 }
 
-// Applies a square (odd-sized) kernel via convolution — a neighborhood
-// operation: each output pixel is a weighted sum of the input pixel and
-// its neighbors. Edge pixels clamp to the nearest valid coordinate rather
-// than sampling out of bounds.
-export function convolve(imageData, kernel, {normalize = true} = {}) {
-  const {width, height, data} = imageData;
-  const out = cloneImageData(imageData);
-  const od = out.data;
-  const kSize = Math.round(Math.sqrt(kernel.length));
-  const kHalf = Math.floor(kSize / 2);
-  const kSum = kernel.reduce((a, b) => a + b, 0);
-  const norm = normalize && kSum !== 0 ? kSum : 1;
-
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      let r = 0, g = 0, b = 0;
-      for (let ky = 0; ky < kSize; ky++) {
-        for (let kx = 0; kx < kSize; kx++) {
-          const sx = Math.min(width - 1, Math.max(0, x + kx - kHalf));
-          const sy = Math.min(height - 1, Math.max(0, y + ky - kHalf));
-          const si = pixelIndex(sx, sy, width);
-          const kv = kernel[ky * kSize + kx];
-          r += data[si] * kv;
-          g += data[si + 1] * kv;
-          b += data[si + 2] * kv;
-        }
-      }
-      const di = pixelIndex(x, y, width);
-      od[di] = clamp255(r / norm);
-      od[di + 1] = clamp255(g / norm);
-      od[di + 2] = clamp255(b / norm);
-    }
-  }
-  return out;
-}
-
 // Gamma encode (linear -> display signal) and decode (display -> linear),
 // operating on 0..1 values: C_out = C_in^(1/gamma) and C_in = C_out^gamma.
 export function gammaEncode(linear, gamma = 2.2) {
@@ -231,16 +195,6 @@ export function histogram(imageData, channel = 0) {
   const d = imageData.data;
   for (let p = channel; p < d.length; p += 4) bins[d[p]]++;
   return bins;
-}
-
-// Straight-alpha source-over compositing: a linear interpolation between
-// destination and source, weighted by the source's own opacity.
-export function compositeOver(src, srcAlpha, dst) {
-  return {
-    r: src.r * srcAlpha + dst.r * (1 - srcAlpha),
-    g: src.g * srcAlpha + dst.g * (1 - srcAlpha),
-    b: src.b * srcAlpha + dst.b * (1 - srcAlpha)
-  };
 }
 
 // Lays out labeled DOM nodes (canvases, swatches, ...) in a row, wrapping

@@ -4,9 +4,8 @@ toc: true
 ---
 
 ```js echo
-import * as d3 from "npm:d3";
-import * as vec3 from "./components/vec3.js";
-import * as webgpu from "./components/webgpu.js";
+import * as vec3 from "./lib/math/vec3.js";
+import {initializeWebGPU} from "./lib/webgpu.js";
 import {plane, drawPoint, dragPoints} from "./components/vectorField.js";
 import * as Inputs from "npm:@observablehq/inputs";
 import {html} from "npm:htl";
@@ -735,8 +734,7 @@ channel before scaling by 255 (a `Uint8Array` wraps 256 to 0), and set
 alpha to 255.
 
 ```js echo
-const {adapter, device} = await webgpu.requestDevice();
-const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
+const {device, format: canvasFormat} = await initializeWebGPU(document.createElement("canvas"));   // a blank canvas: each demo adds its own below
 const deviceErrorLog = document.createElement("pre");
 deviceErrorLog.style.cssText = "display: none; color: #e5484d; background: #2a1214; border: 1px solid #e5484d; border-radius: 6px; padding: 8px 12px; font-size: 12px; white-space: pre-wrap;";
 device.addEventListener("uncapturederror", (e) => { deviceErrorLog.textContent += `WebGPU error: ${e.error.message}\n`; deviceErrorLog.style.display = "block"; });
@@ -769,7 +767,7 @@ const nearestSampler = device.createSampler({magFilter: "nearest", minFilter: "n
 const boxCanvas = document.createElement("canvas");
 boxCanvas.width = 640; boxCanvas.height = 400;
 boxCanvas.style.cssText = "width: 640px; max-width: 100%; border-radius: 8px";
-const {context: boxContext} = webgpu.configureCanvas(boxCanvas, device);
+const {context: boxContext} = await initializeWebGPU(boxCanvas, {device});
 const boxProgress = html`<pre style="margin: 4px 0">starting…</pre>`;
 const boxRun = {generation: 0, texture: null};
 ```
@@ -1047,7 +1045,7 @@ const showBindGroup = device.createBindGroup({layout: showPipeline.getBindGroupL
 const gpuCanvas = document.createElement("canvas");
 gpuCanvas.width = gpuW; gpuCanvas.height = gpuH;
 gpuCanvas.style.cssText = "border-radius: 8px; cursor: crosshair; max-width: 100%";
-const {context: gpuContext} = webgpu.configureCanvas(gpuCanvas, device);
+const {context: gpuContext} = await initializeWebGPU(gpuCanvas, {device});
 const pickLabel = html`<pre style="margin: 4px 0">click a sphere to pick it</pre>`;
 const gpuState = {selected: -1, camera: null, draw: () => {}};
 ```
@@ -1078,7 +1076,7 @@ In a **rasterizer**, the same picking code needs the ray tracer's camera
 from the rasterizer's one: ${tex`t = d\tan(\text{fovy}/2) = -b`} and
 ${tex`r = \text{aspect}\cdot t = -l`}. ${tex`\mathbf u, \mathbf v, \mathbf w`}
 are the **rows** of the view matrix's rotation; in a column-major array
-`V` (as in `lib/math/mat4.js`), ${tex`\mathbf u = (V_0, V_4, V_8)`},
+`V` (as in `lib/math/transforms.js`), ${tex`\mathbf u = (V_0, V_4, V_8)`},
 ${tex`\mathbf v = (V_1, V_5, V_9)`}, and
 ${tex`\mathbf w = (V_2, V_6, V_{10})`}. The origin ${tex`\mathbf e`} is
 the camera's eye, not the matrix's translation.

@@ -4,7 +4,8 @@ toc: true
 ---
 
 ```js echo
-import * as webgpu from "./components/webgpu.js";
+import * as mipmaps from "./components/mipmaps.js";
+import {initializeWebGPU} from "./lib/webgpu.js";
 import * as raster from "./components/raster.js";
 import * as Inputs from "npm:@observablehq/inputs";
 ```
@@ -552,13 +553,13 @@ material set.
 
 A texture seen from far away is sampled from a smaller **mip level**
 (Module 08 explains why). WebGPU has no built-in mipmap generator. The
-shared `webgpu.generateMipCanvases(canvas)` helper builds the chain on
+shared `mipmaps.generateMipCanvases(canvas)` helper builds the chain on
 the CPU by drawing each level at half the size of the previous one,
 letting the browser's image smoothing do the averaging. Here is the
 brick texture's chain, each level enlarged to the same display size:
 
 ```js echo
-const brickMips = webgpu.generateMipCanvases(bricks);
+const brickMips = mipmaps.generateMipCanvases(bricks);
 display(
   raster.sideBySide(
     brickMips.slice(0, 7).map((level, i) => [`level ${i}: ${level.width}×${level.height}`, show(level, 112)]),
@@ -603,8 +604,7 @@ Choose the format by what the texture holds:
   treat colors as already displayable, which keeps the shaders simpler.
 
 ```js echo
-const {device} = await webgpu.requestDevice();
-const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
+const {device, format: canvasFormat} = await initializeWebGPU(document.createElement("canvas"));   // a blank canvas: each demo adds its own below
 
 const deviceErrorLog = document.createElement("pre");
 deviceErrorLog.style.cssText = "display: none; color: #e5484d; background: #2a1214; border: 1px solid #e5484d; border-radius: 6px; padding: 8px 12px; font-size: 12px; white-space: pre-wrap;";
@@ -619,7 +619,7 @@ display(deviceErrorLog);
 
 ```js echo
 function textureFromCanvas(canvas, {mipmaps = true, format = "rgba8unorm"} = {}) {
-  const levels = mipmaps ? webgpu.generateMipCanvases(canvas) : [canvas];
+  const levels = mipmaps ? mipmaps.generateMipCanvases(canvas) : [canvas];
   const texture = device.createTexture({
     size: [canvas.width, canvas.height],
     format,
@@ -651,7 +651,7 @@ function textureArrayFromCanvases(canvases, {format = "rgba8unorm"} = {}) {
   if (canvases.some((c) => c.width !== width || c.height !== height)) {
     throw new Error("Every layer of a texture array must be the same size.");
   }
-  const mipLevelCount = webgpu.generateMipCanvases(canvases[0]).length;
+  const mipLevelCount = mipmaps.generateMipCanvases(canvases[0]).length;
   const texture = device.createTexture({
     size: [width, height, canvases.length],
     format,
@@ -659,7 +659,7 @@ function textureArrayFromCanvases(canvases, {format = "rgba8unorm"} = {}) {
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
   });
   canvases.forEach((canvas, layer) => {
-    webgpu.generateMipCanvases(canvas).forEach((level, mipLevel) => {
+    mipmaps.generateMipCanvases(canvas).forEach((level, mipLevel) => {
       device.queue.copyExternalImageToTexture(
         {source: level},
         {texture, mipLevel, origin: [0, 0, layer]},
@@ -731,7 +731,7 @@ const previewPipeline = device.createRenderPipeline({
 const previewParams = device.createBuffer({size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
 const previewCanvas = makeCanvas(384);
 previewCanvas.style.borderRadius = "8px";
-const {context: previewContext} = webgpu.configureCanvas(previewCanvas, device);
+const {context: previewContext} = await initializeWebGPU(previewCanvas, {device});
 ```
 
 ```js echo

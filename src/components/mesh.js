@@ -89,20 +89,3 @@ export function checkManifold(faces) {
   }
   return {isManifold: nonManifoldEdges.length === 0, boundaryEdges, nonManifoldEdges};
 }
-
-// Flat normal of a face, from its first three vertices (a face is
-// assumed planar, as required for the winding to define a normal at all).
-export function faceNormal(positions, face) {
-  return vec3.triangleNormal(positions[face[0]], positions[face[1]], positions[face[2]]);
-}
-
-// One normal per vertex, averaging the (unweighted) face normals of
-// every face touching it — the vertex-normal rule from lecture.
-export function averageVertexNormals(positions, faces) {
-  const acc = positions.map(() => ({x: 0, y: 0, z: 0}));
-  for (const face of faces) {
-    const n = faceNormal(positions, face);
-    for (const v of face) acc[v] = vec3.add(acc[v], n);
-  }
-  return acc.map((n) => (vec3.length(n) < 1e-10 ? n : vec3.normalize(n)));
-}

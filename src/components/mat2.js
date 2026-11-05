@@ -59,18 +59,6 @@ export function invert(M) {
   };
 }
 
-// Q^T Q should equal the identity (within floating-point tolerance) exactly
-// when Q's columns are unit length and mutually perpendicular.
-export function isOrthonormal(M, tolerance = 1e-6) {
-  const QtQ = multiply(transpose(M), M);
-  return (
-    Math.abs(QtQ.m00 - 1) < tolerance &&
-    Math.abs(QtQ.m11 - 1) < tolerance &&
-    Math.abs(QtQ.m01) < tolerance &&
-    Math.abs(QtQ.m10) < tolerance
-  );
-}
-
 export function frobeniusDistance(A, B) {
   return Math.sqrt(
     (A.m00 - B.m00) ** 2 + (A.m01 - B.m01) ** 2 + (A.m10 - B.m10) ** 2 + (A.m11 - B.m11) ** 2
@@ -89,11 +77,6 @@ export function rotation(theta) {
   const c = Math.cos(theta);
   const s = Math.sin(theta);
   return {m00: c, m01: -s, m10: s, m11: c};
-}
-
-export function reflectionX() {
-  // Flips y — reflects across the x-axis.
-  return {m00: 1, m01: 0, m10: 0, m11: -1};
 }
 
 export function reflectionY() {

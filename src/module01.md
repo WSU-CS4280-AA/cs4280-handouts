@@ -5,7 +5,7 @@ toc: true
 
 ```js echo
 import * as vec2 from "./components/vec2.js";
-import * as vec3 from "./components/vec3.js";
+import * as vec3 from "./lib/math/vec3.js";
 import * as mat2 from "./components/mat2.js";
 import {plane, drawArrow, drawPolygon, drawEllipse, dragVectors, dragPoints} from "./components/vectorField.js";
 import * as Inputs from "npm:@observablehq/inputs";
@@ -26,7 +26,7 @@ mathematical objects. This module builds each one and makes it live:
 
 Drag points and vector tips, or move sliders, to see the calculations and
 pictures update. The helper functions are defined in
-`components/vec2.js`, `vec3.js`, and `mat2.js`.
+`components/vec2.js`, `lib/math/vec3.js`, and `components/mat2.js`.
 Everything here is plain JavaScript, so no GPU is needed. This handout
 teaches the *techniques* behind the module; it is not a walkthrough of
 any graded assignment.
