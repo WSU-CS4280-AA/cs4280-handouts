@@ -3,7 +3,7 @@ title: Module 09 — Curves
 toc: true
 ---
 
-```js echo
+```js
 import * as d3 from "npm:d3";
 import * as vec2 from "./components/vec2.js";
 import * as mat2 from "./components/mat2.js";
@@ -23,23 +23,28 @@ to specify it. This module starts from the simplest parametric curve, the
 curves as repeated lerps, polynomial pieces with basis matrices, splines
 (natural, Hermite, cardinal, B-splines), and finally drawing and
 animating curves on the GPU and loading a model to move along them. Every
-formula becomes a function you can call, and most figures have control
-points you can drag. The WebGPU section needs **Chrome or Edge 113+**.
+formula becomes a function you can call and test, and most figures have control
+points you can drag. The code that only draws the figures stays out of sight. The
+WebGPU section needs **Chrome or Edge 113+**.
 This handout teaches the *techniques*; it is not a walkthrough of any
 graded assignment.
 
-A small helper draws a polyline in any `plane` scene:
-
-```js echo
+```js
 function drawPath(scene, points, {stroke = "steelblue", width = 2, dash = null, opacity = 1, clip = Infinity} = {}) {
   const line = d3.line().x((p) => scene.x(p.x)).y((p) => scene.y(p.y))
-    .defined((p) => Math.abs(p.x) < clip && Math.abs(p.y) < clip);      // skip points outside the view
-  const path = scene.svg.append("path").attr("d", line(points)).attr("fill", "none")
-    .attr("stroke", stroke).attr("stroke-width", width).attr("opacity", opacity);
+    // skip points outside the view
+    .defined((p) => Math.abs(p.x) < clip && Math.abs(p.y) < clip);
+  const path =
+    scene.svg.append("path").attr("d", line(points)).attr("fill", "none")
+    .attr("stroke", stroke).attr(
+      "stroke-width", width
+    ).attr("opacity", opacity);
   if (dash) path.attr("stroke-dasharray", dash);
   return path;
 }
-const sampleCurve = (f, n = 100, a = 0, b = 1) => d3.range(n + 1).map((i) => f(a + (b - a) * i / n));
+const sampleCurve = (f, n = 100, a = 0, b = 1) => d3.range(n + 1).map(
+  (i) => f(a + (b - a) * i / n)
+);
 ```
 
 ## Representing Curves
@@ -61,11 +66,11 @@ ${tex`\mathbf f'(t) = (x'(t), y'(t))`}. It is the pen's **velocity**: its
 direction is the **tangent**, and its length is the **speed**. The figure
 eight below is ${tex`\mathbf f(t) = (2.6\cos t,\ 1.6\sin 2t)`}:
 
-```js echo
+```js
 const velT = view(Inputs.range([0, 2 * Math.PI], {value: 0.8, step: 0.01, label: "t"}));
 ```
 
-```js echo
+```js
 (() => {
   const f = (t) => ({x: 2.6 * Math.cos(t), y: 1.6 * Math.sin(2 * t)});
   const df = (t) => ({x: -2.6 * Math.sin(t), y: 3.2 * Math.cos(2 * t)});   // f'(t), one coordinate at a time
@@ -90,16 +95,24 @@ ${tex`\mathbf f(u) = (1-u)\,\mathbf p_0 + u\,\mathbf p_1`}. Every curve
 in this module is built from this one function:
 
 ```js echo
-const lerp = (a, b, u) => ({x: (1 - u) * a.x + u * b.x, y: (1 - u) * a.y + u * b.y});
+const lerp = (a, b, u) =>
+  ({x: (1 - u) * a.x + u * b.x, y: (1 - u) * a.y + u * b.y});
 ```
 
+A quarter of the way from (0, 0) to (4, 2) should be (1, 0.5):
+
 ```js echo
+lerp({x: 0, y: 0}, {x: 4, y: 2}, 0.25)
+```
+
+```js
 const lerpWidget = dragPoints({"p₀": {x: -2.5, y: -1}, "p₁": {x: 2, y: 1.5}}, {domain: 3.6});
 const lerpPts = view(lerpWidget);
 const lerpU = view(Inputs.range([-0.5, 1.5], {value: 0.3, step: 0.01, label: "u"}));
 ```
 
-```js echo
+```js
+{
 lerpWidget.redecorate((scene) => {
   const {"p₀": p0, "p₁": p1} = lerpPts;
   drawPath(scene, [lerp(p0, p1, -0.5), lerp(p0, p1, 1.5)], {stroke: "gray", width: 1, dash: "4,3"});
@@ -107,7 +120,8 @@ lerpWidget.redecorate((scene) => {
   d3.range(11).forEach((i) => drawPoint(scene, lerp(p0, p1, i / 10), {color: "steelblue", r: 2.5}));
   const outside = lerpU < 0 || lerpU > 1;
   drawPoint(scene, lerp(p0, p1, lerpU), {color: outside ? "crimson" : "orangered", r: 6, label: `f(${lerpU.toFixed(2)})`});
-})
+});
+}
 ```
 
 Weights ${tex`(1-u,\ u)`} = (${(1 - lerpU).toFixed(2)}, ${lerpU.toFixed(2)}).
@@ -123,16 +137,23 @@ ${tex`\sum_i w_i\,\mathbf p_i`} with ${tex`\sum_i w_i = 1`} is an **affine
 combination**, and it moves with the points: translate every point by
 ${tex`\mathbf d`} and the result moves by ${tex`\mathbf d`} too. If every
 ${tex`w_i \ge 0`} as well, it is a **convex combination**, and the result
-stays inside the **convex hull** of the points. The table translates three
-points by ${tex`\mathbf d = (10, -4)`}:
+stays inside the **convex hull** of the points. A weighted sum is short to write:
 
 ```js echo
+const combine = (w, pts) => pts.reduce(
+  (s, p, i) => vec2.add(s, vec2.scale(p, w[i])), {x: 0, y: 0}
+);
+```
+
+Let's test that claim. Translate three points by ${tex`\mathbf d = (10, -4)`} and see how far
+each combination moves:
+
+```js
 (() => {
   const P = [{x: 1, y: 0}, {x: 3, y: 1}, {x: 2, y: 3}], d = {x: 10, y: -4};
-  const combo = (w, pts) => pts.reduce((s, p, i) => vec2.add(s, vec2.scale(p, w[i])), {x: 0, y: 0});
   const moved = P.map((p) => vec2.add(p, d));
   return Inputs.table([[0.2, 0.5, 0.3], [-0.5, 1, 0.5], [0.4, 0.5, 0.3]].map((w) => {
-    const sum = d3.sum(w), shift = vec2.sub(combo(w, moved), combo(w, P));
+    const sum = d3.sum(w), shift = vec2.sub(combine(w, moved), combine(w, P));
     return {
       weights: w.join(", "), sum: sum.toFixed(1),
       "result moves by": `(${shift.x.toFixed(1)}, ${shift.y.toFixed(1)})`,
@@ -152,11 +173,11 @@ The same curve can be traced with different timing. Below, the same
 segment is traced by ${tex`(u,u)`}, ${tex`(u^2,u^2)`}, and
 ${tex`(u^5,u^5)`} at 11 equal steps of ${tex`u`}:
 
-```js echo
+```js
 const reparamPower = view(Inputs.range([1, 6], {value: 2, step: 0.5, label: "power p in f(u) = (uᵖ, uᵖ)"}));
 ```
 
-```js echo
+```js
 Plot.plot({
   height: 120, x: {domain: [0, 1], label: "position along the segment"}, y: {axis: null},
   marks: [
@@ -183,21 +204,39 @@ sub-triangle opposite ${tex`\mathbf a`} over the whole area. In 2D, the
 signed area comes from a cross product:
 
 ```js echo
-const signedArea = (a, b, c) => ((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) / 2;
+const signedArea = (a, b, c) =>
+  ((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) / 2;
+```
+
+Each weight replaces one corner with ${tex`\mathbf p`} and measures that sub-triangle:
+
+```js echo
 function barycentric(a, b, c, p) {
   const A = signedArea(a, b, c);
-  return {alpha: signedArea(p, b, c) / A, beta: signedArea(a, p, c) / A, gamma: signedArea(a, b, p) / A};
+  return {
+    alpha: signedArea(p, b, c) / A,
+    beta: signedArea(a, p, c) / A,
+    gamma: signedArea(a, b, p) / A
+  };
 }
 ```
 
+The centroid of any triangle should have all three coordinates equal to ⅓. The
+triangle (0, 0), (3, 0), (0, 3) has its centroid at (1, 1):
+
 ```js echo
+barycentric({x: 0, y: 0}, {x: 3, y: 0}, {x: 0, y: 3}, {x: 1, y: 1})
+```
+
+```js
 const baryWidget = dragPoints({
   a: {x: -2.6, y: -1.8}, b: {x: 2.8, y: -1.2}, c: {x: -0.2, y: 2.6}, p: {x: 0.2, y: 0}
 }, {domain: 3.6, colors: ["crimson", "seagreen", "royalblue", "currentColor"]});
 const baryPts = view(baryWidget);
 ```
 
-```js echo
+```js
+{
 baryWidget.redecorate((scene) => {
   const {a, b, c, p} = baryPts, w = barycentric(a, b, c, p);
   // each sub-triangle is shaded in the color of the corner it is opposite
@@ -208,10 +247,11 @@ baryWidget.redecorate((scene) => {
   const channel = (v) => Math.round(255 * Math.min(1, Math.max(0, v)));
   scene.svg.append("circle").attr("cx", scene.x(p.x)).attr("cy", scene.y(p.y)).attr("r", 13)
     .attr("fill", `rgb(${channel(w.alpha)}, ${channel(w.beta)}, ${channel(w.gamma)})`);
-})
+});
+}
 ```
 
-```js echo
+```js
 (() => {
   const {a, b, c, p} = baryPts, {alpha, beta, gamma} = barycentric(a, b, c, p);
   const inside = alpha >= 0 && beta >= 0 && gamma >= 0;
@@ -235,13 +275,31 @@ legs of the **control polygon**, then lerp between the results:
 
 ${tex.block`\mathbf q_0 = \operatorname{lerp}(\mathbf p_0, \mathbf p_1, u),\quad \mathbf q_1 = \operatorname{lerp}(\mathbf p_1, \mathbf p_2, u),\quad \mathbf f(u) = \operatorname{lerp}(\mathbf q_0, \mathbf q_1, u) = (1-u)^2\mathbf p_0 + 2u(1-u)\,\mathbf p_1 + u^2\mathbf p_2`}
 
+The code is those three lerps:
+
 ```js echo
+function quadraticPoint(p0, p1, p2, u) {
+  const q0 = lerp(p0, p1, u), q1 = lerp(p1, p2, u);
+  return lerp(q0, q1, u);
+}
+```
+
+The expanded formula says that at ${tex`u = 0.5`}, the weights are ¼, ½, and ¼. For the points
+(0, 0), (2, 4), and (4, 0), that gives ${tex`y = \tfrac12 \cdot 4 = 2`}, halfway to the
+middle control point. The curve does not reach it:
+
+```js echo
+quadraticPoint({x: 0, y: 0}, {x: 2, y: 4}, {x: 4, y: 0}, 0.5)
+```
+
+```js
 const quadWidget = dragPoints({"p₀": {x: -3, y: -1.5}, "p₁": {x: -0.5, y: 2.8}, "p₂": {x: 3, y: -1}}, {domain: 3.6});
 const quadPts = view(quadWidget);
 const quadU = view(Inputs.range([0, 1], {value: 0.35, step: 0.01, label: "u"}));
 ```
 
-```js echo
+```js
+{
 quadWidget.redecorate((scene) => {
   const [p0, p1, p2] = Object.values(quadPts);
   const q0 = lerp(p0, p1, quadU), q1 = lerp(p1, p2, quadU);
@@ -251,7 +309,8 @@ quadWidget.redecorate((scene) => {
   drawPoint(scene, q0, {color: "seagreen", r: 4, label: "q₀"});
   drawPoint(scene, q1, {color: "seagreen", r: 4, label: "q₁"});
   drawPoint(scene, lerp(q0, q1, quadU), {color: "crimson", r: 6, label: "f(u)"});
-})
+});
+}
 ```
 
 The curve starts at ${tex`\mathbf p_0`} and ends at ${tex`\mathbf p_2`},
@@ -274,20 +333,36 @@ function deCasteljauLevels(points, u) {
   }
   return levels;
 }
-const deCasteljau = (points, u) => deCasteljauLevels(points, u).at(-1)[0];
 ```
 
+The final level has a single point, which is the point on the curve:
+
 ```js echo
+const deCasteljau = (points, u) => deCasteljauLevels(points, u).at(-1)[0];
+const testCubic =
+  [{x: -1, y: 0}, {x: -1, y: 1}, {x: 1, y: 1}, {x: 1, y: 0}];
+```
+
+The last level holds the point on the curve. For a symmetric cubic at ${tex`u = 0.5`},
+that point sits on the axis of symmetry, so ${tex`x`} should be 0. It also lands
+three quarters of the way up to the top control points, at ${tex`y = 0.75`}:
+
+```js echo
+deCasteljau(testCubic, 0.5)
+```
+
+```js
 const dcWidget = dragPoints({P0: {x: -2.8, y: -1}, P1: {x: -1.2, y: 2.2}, P2: {x: 1.2, y: 2.2}, P3: {x: 2.8, y: -1}}, {domain: 3.6});
 const dcByLabel = view(dcWidget);
 const dcT = view(Inputs.range([0, 1], {value: 0.5, step: 0.01, label: "u"}));
 ```
 
-```js echo
+```js
 const dcControls = Object.values(dcByLabel);   // read in its own cell so it updates while dragging
 ```
 
-```js echo
+```js
+{
 dcWidget.redecorate((scene) => {
   drawPath(scene, dcControls, {stroke: "gray", width: 1, dash: "4,3"});
   drawPath(scene, sampleCurve((u) => deCasteljau(dcControls, u), 80), {stroke: "steelblue", width: 3});
@@ -298,7 +373,8 @@ dcWidget.redecorate((scene) => {
     level.forEach((p) => drawPoint(scene, p, {color: palette[k], r: 3}));
   });
   drawPoint(scene, levels.at(-1)[0], {color: "crimson", r: 6, label: "f(u)"});
-})
+});
+}
 ```
 
 With four points the levels are ${tex`\mathbf p_0 \ldots \mathbf p_3`}
@@ -313,26 +389,47 @@ reshape them.
 Expanding the levels of lerps gives the **Bézier curve**. Its weights are
 the **Bernstein polynomials**
 ${tex`b_{k,n}(u) = \binom{n}{k}u^k(1-u)^{n-k}`}, and
-${tex`\mathbf f(u) = \sum_k b_{k,n}(u)\,\mathbf p_k`}:
+${tex`\mathbf f(u) = \sum_k b_{k,n}(u)\,\mathbf p_k`}. First, the weights. Rather than
+computing each binomial coefficient from scratch, the loop updates the previous one, using
+${tex`\binom{n}{k+1} = \binom{n}{k}\frac{n-k}{k+1}`}:
 
 ```js echo
-function bernsteinPoint(points, u) {
-  const n = points.length - 1;
-  let x = 0, y = 0, binom = 1;
-  points.forEach((p, k) => {
+function bernsteinWeights(n, u) {
+  let binom = 1;
+  return d3.range(n + 1).map((k) => {
     const b = binom * u ** k * (1 - u) ** (n - k);
-    x += b * p.x; y += b * p.y;
     binom = (binom * (n - k)) / (k + 1);
+    return b;
   });
-  return {x, y};
 }
 ```
 
+For a cubic at ${tex`u = 0.5`}, they should be ⅛, ⅜, ⅜, and ⅛, which sum to 1:
+
 ```js echo
+bernsteinWeights(3, 0.5)
+```
+
+The curve point is then a weighted sum of the control points, which is `combine` from
+earlier:
+
+```js echo
+const bernsteinPoint = (points, u) =>
+  combine(bernsteinWeights(points.length - 1, u), points);
+```
+
+The two definitions describe the same curve, so the Bernstein form should give the
+same point as de Casteljau's algorithm above, (0, 0.75):
+
+```js echo
+bernsteinPoint(testCubic, 0.5)
+```
+
+```js
 const bernDegree = view(Inputs.range([1, 6], {value: 3, step: 1, label: "degree n"}));
 ```
 
-```js echo
+```js
 (() => {
   const binom = (n, k) => d3.range(k).reduce((c, j) => (c * (n - j)) / (j + 1), 1);
   const rows = d3.range(0, 1.0001, 0.01).flatMap((u) => d3.range(bernDegree + 1).map((k) =>
@@ -348,7 +445,7 @@ ${tex`\ge 0`} on ${tex`[0, 1]`}: every curve point is a **convex
 combination** of the control points. Degree 1 is the lerp. Both ways of
 computing the cubic agree:
 
-```js echo
+```js
 html`<pre>de Casteljau  f(${dcT.toFixed(2)}) = (${deCasteljau(dcControls, dcT).x.toFixed(6)}, ${deCasteljau(dcControls, dcT).y.toFixed(6)})
 Bernstein     f(${dcT.toFixed(2)}) = (${bernsteinPoint(dcControls, dcT).x.toFixed(6)}, ${bernsteinPoint(dcControls, dcT).y.toFixed(6)})</pre>`
 ```
@@ -362,11 +459,19 @@ ${tex`n(\mathbf p_{k+1} - \mathbf p_k)`}:
 ```js echo
 function bezierDerivative(points, u) {
   const n = points.length - 1;
-  return bernsteinPoint(points.slice(1).map((p, k) => vec2.scale(vec2.sub(p, points[k]), n)), u);
+  const legs = points.slice(1).map((p, k) => vec2.sub(p, points[k]));
+  return bernsteinPoint(legs.map((leg) => vec2.scale(leg, n)), u);
 }
 ```
 
+At ${tex`u = 0`}, only the first leg counts. In our test cubic, that leg is (0, 1), so the
+derivative should be 3 times that, (0, 3):
+
 ```js echo
+bezierDerivative(testCubic, 0)
+```
+
+```js
 (() => {
   const scene = plane({domain: 3.6});
   drawPath(scene, dcControls, {stroke: "gray", width: 1, dash: "4,3"});
@@ -394,14 +499,14 @@ Drag ${tex`P_1`} onto ${tex`P_0`} and the speed at ${tex`u = 0`} drops to 0.
 
 ### Bézier properties
 
-```js echo
+```js
 const affineForm = view(Inputs.form({
   angle: Inputs.range([-180, 180], {value: 35, step: 1, label: "rotate"}),
   scale: Inputs.range([0.4, 1.8], {value: 1.2, step: 0.05, label: "scale"})
 }));
 ```
 
-```js echo
+```js
 (() => {
   const T = mat2.multiply(mat2.rotation((affineForm.angle * Math.PI) / 180), mat2.scaling(affineForm.scale, affineForm.scale));
   const moved = dcControls.map((p) => mat2.apply(T, p));
@@ -435,12 +540,31 @@ The de Casteljau points **split** the curve at ${tex`u`}. The first point
 of each level, from ${tex`\mathbf p_0`} down to ${tex`\mathbf f(u)`}, gives
 the control points of the left half, and the last point of each level,
 from ${tex`\mathbf f(u)`} to ${tex`\mathbf p_3`}, gives the right half
-(using the points and ${tex`u`} from the de Casteljau figure):
+(using the points and ${tex`u`} from the de Casteljau figure). Since we kept every level, the
+split takes only a couple of lines:
 
 ```js echo
+function splitBezier(points, u) {
+  const levels = deCasteljauLevels(points, u);
+  return {
+    left: levels.map((l) => l[0]),
+    right: levels.map((l) => l.at(-1)).reverse()
+  };
+}
+```
+
+Both halves should meet at the point on the curve, (0, 0.75) for our test cubic at the middle:
+
+```js echo
+{
+  const {left, right} = splitBezier(testCubic, 0.5);
+  display([left.at(-1), right[0]].map((p) => `(${p.x}, ${p.y})`));
+}
+```
+
+```js
 (() => {
-  const levels = deCasteljauLevels(dcControls, dcT);
-  const left = levels.map((l) => l[0]), right = levels.map((l) => l.at(-1)).reverse();
+  const {left, right} = splitBezier(dcControls, dcT);
   const scene = plane({domain: 3.6});
   for (const [poly, stroke] of [[left, "steelblue"], [right, "orangered"]]) {
     drawPath(scene, poly, {stroke, width: 1, dash: "4,3"});
@@ -457,29 +581,41 @@ cutting**: split every leg at its midpoint and move the corner to the
 midpoint of the new segment:
 
 ```js echo
+function cutCorner(a, corner, b) {
+  const first = lerp(a, corner, 0.5), second = lerp(corner, b, 0.5);
+  return [first, lerp(first, second, 0.5), second];
+}
+```
+
+To cut a whole polygon, we cut every interior corner. Neighboring cuts can produce the same
+point twice, so repeats are skipped:
+
+```js echo
+function cutCorners(poly) {
+  const cuts = d3.range(1, poly.length - 1)
+    .flatMap((i) => cutCorner(poly[i - 1], poly[i], poly[i + 1]));
+  return [poly[0], ...cuts, poly.at(-1)].filter((p, i, all) =>
+    i === 0 || Math.hypot(p.x - all[i - 1].x, p.y - all[i - 1].y) > 1e-12);
+}
+```
+
+```js
 const cutWidget = dragPoints({P0: {x: -3, y: -1.5}, P1: {x: 0, y: 2.8}, P2: {x: 3, y: -1.5}}, {domain: 3.6});
 const cutPts = view(cutWidget);
 const cutSteps = view(Inputs.range([0, 6], {value: 2, step: 1, label: "corner cuts"}));
 ```
 
-```js echo
+```js
+{
 cutWidget.redecorate((scene) => {
   const P = Object.values(cutPts);
   let poly = P;
-  for (let s = 0; s < cutSteps; s++) {
-    const next = [poly[0]];
-    const add = (p) => { const q = next.at(-1); if (Math.hypot(p.x - q.x, p.y - q.y) > 1e-12) next.push(p); };   // skip repeated points
-    for (let i = 1; i < poly.length - 1; i++) {
-      const a = lerp(poly[i - 1], poly[i], 0.5), b = lerp(poly[i], poly[i + 1], 0.5);
-      add(a); add(lerp(a, b, 0.5)); add(b);
-    }
-    add(poly.at(-1));
-    poly = next;
-  }
+  for (let s = 0; s < cutSteps; s++) poly = cutCorners(poly);
   drawPath(scene, sampleCurve((u) => bernsteinPoint(P, u), 80), {stroke: "#ccc", width: 7});
   drawPath(scene, poly, {stroke: "steelblue", width: 2});
   poly.forEach((p) => drawPoint(scene, p, {color: "orangered", r: 2.5}));
-})
+});
+}
 ```
 
 After ${cutSteps} cuts the polygon has ${tex`2^{n+1}+1`} = ${2 ** (cutSteps + 1) + 1} points
@@ -490,18 +626,42 @@ each piece's control points are nearly collinear. The convex hull
 guarantees that a line segment is then close to the piece:
 
 ```js echo
+const distanceToLine = (p, a, b) =>
+  Math.abs((b.x - a.x) * (a.y - p.y) - (a.x - p.x) * (b.y - a.y))
+  / (Math.hypot(b.x - a.x, b.y - a.y) || 1);
+```
+
+If both inner control points are close to the chord, the piece is flat enough and its end point
+is emitted. Otherwise, split and recurse:
+
+```js echo
 function flattenBezier(P, tol, out = [P[0]]) {
-  const dist = (p, a, b) => Math.abs((b.x - a.x) * (a.y - p.y) - (a.x - p.x) * (b.y - a.y)) / (Math.hypot(b.x - a.x, b.y - a.y) || 1);
-  if (Math.max(dist(P[1], P[0], P[3]), dist(P[2], P[0], P[3])) < tol) { out.push(P[3]); return out; }
-  const L = deCasteljauLevels(P, 0.5);
-  flattenBezier(L.map((l) => l[0]), tol, out);
-  flattenBezier(L.map((l) => l.at(-1)).reverse(), tol, out);
+  const flat = distanceToLine(P[1], P[0], P[3]) < tol
+    && distanceToLine(P[2], P[0], P[3]) < tol;
+  if (flat) { out.push(P[3]); return out; }
+  const {left, right} = splitBezier(P, 0.5);
+  flattenBezier(left, tol, out);
+  flattenBezier(right, tol, out);
   return out;
 }
+```
+
+A straight curve is flat immediately, so it should need only its two end points, while
+a curved one needs more as the tolerance tightens:
+
+```js echo
+[
+  flattenBezier(d3.range(4).map((i) => ({x: i, y: i})), 0.01).length,
+  flattenBezier(testCubic, 0.1).length,
+  flattenBezier(testCubic, 0.001).length
+]
+```
+
+```js
 const flatTol = view(Inputs.range([0.002, 0.5], {value: 0.05, step: 0.002, label: "tolerance (plane units)"}));
 ```
 
-```js echo
+```js
 (() => {
   const pts = flattenBezier(dcControls, flatTol);
   const scene = plane({domain: 3.6});
@@ -532,32 +692,52 @@ ${tex`B = C^{-1}`}, and ${tex`\mathbf f(u) = \mathbf u B \mathbf p`}. The
 code below builds ${tex`C`} from a list of constraints and inverts it:
 
 ```js echo
-// Row of C for "the k-th derivative of f at u" for a polynomial of degree n.
 function constraintRow(n, u, k = 0) {
   return d3.range(n + 1).map((i) => {
     if (i < k) return 0;
-    let c = 1;
-    for (let j = 0; j < k; j++) c *= i - j;       // i (i-1) ... (i-k+1)
-    return c * u ** (i - k);
+    const falling = d3.range(k).reduce((c, j) => c * (i - j), 1);
+    return falling * u ** (i - k);
   });
 }
+```
 
-function invert(M) {                              // Gauss-Jordan elimination with partial pivoting
+That is one row of ${tex`C`}: "the ${tex`k`}-th derivative of a degree-${tex`n`} polynomial at
+${tex`u`}". The factor `falling` is ${tex`i(i-1)\cdots(i-k+1)`}, what remains of ${tex`u^i`} after
+differentiating ${tex`k`} times. For example, the first derivative of ${tex`[1, u, u^2, u^3]`} is
+${tex`[0, 1, 2u, 3u^2]`}, so at ${tex`u = 2`}:
+
+```js echo
+constraintRow(3, 2, 1)
+```
+
+To get the basis matrix, we invert ${tex`C`}. This is standard Gauss–Jordan elimination, not a
+graphics topic, so it stays out of sight as `invert(M)`:
+
+```js
+function invert(M) {
   const n = M.length, A = M.map((row, i) => [...row, ...d3.range(n).map((j) => (i === j ? 1 : 0))]);
   for (let c = 0; c < n; c++) {
     const p = d3.maxIndex(A.slice(c), (row) => Math.abs(row[c])) + c;
     [A[c], A[p]] = [A[p], A[c]];
     const pivot = A[c][c];
     A[c] = A[c].map((v) => v / pivot);
-    for (let r = 0; r < n; r++) if (r !== c) { const f = A[r][c]; A[r] = A[r].map((v, j) => v - f * A[c][j]); }
+    for (let r = 0; r < n; r++) if (r !== c) {
+      const f = A[r][c];
+      A[r] = A[r].map((v, j) => v - f * A[c][j]);
+    }
   }
   return A.map((row) => row.slice(n).map((v) => (Math.abs(v) < 1e-12 ? 0 : v)));
 }
-
-function basisMatrix(degree, constraints) {        // constraints: [{u, k}] for "k-th derivative at u"
-  return invert(constraints.map(({u, k = 0}) => constraintRow(degree, u, k)));
-}
 const showMatrix = (M) => tex`\begin{bmatrix}${M.map((r) => r.map((v) => +v.toFixed(3)).join(" & ")).join(String.raw`\\`)}\end{bmatrix}`;
+```
+
+A basis matrix is built from a list of constraints, one row each:
+
+```js echo
+function basisMatrix(degree, constraints) {
+  const C = constraints.map(({u, k = 0}) => constraintRow(degree, u, k));
+  return invert(C);
+}
 ```
 
 The cubic Bézier conditions are linear too:
@@ -566,10 +746,11 @@ ${tex`\mathbf p_2 = \mathbf f(1) - \tfrac13\mathbf f'(1)`}. Each is a sum
 of constraint rows:
 
 ```js echo
+const addRows = (a, b, k) => a.map((v, i) => v + k * b[i]);
 const bezierRows = [
   constraintRow(3, 0),
-  constraintRow(3, 0).map((v, i) => v + constraintRow(3, 0, 1)[i] / 3),
-  constraintRow(3, 1).map((v, i) => v - constraintRow(3, 1, 1)[i] / 3),
+  addRows(constraintRow(3, 0), constraintRow(3, 0, 1), 1 / 3),
+  addRows(constraintRow(3, 1), constraintRow(3, 1, 1), -1 / 3),
   constraintRow(3, 1)
 ];
 ```
@@ -592,7 +773,7 @@ The **blending functions** are ${tex`\mathbf b(u) = \mathbf u B`}, and
 the curve is ${tex`\mathbf f(u) = \sum_i b_i(u)\,\mathbf p_i`}. Pick a
 basis to see its blending functions:
 
-```js echo
+```js
 const blendBases = {
   "lerp (line)": basisMatrix(1, [{u: 0}, {u: 1}]),
   "quadratic through 3 points": basisMatrix(2, [{u: 0}, {u: 0.5}, {u: 1}]),
@@ -602,7 +783,7 @@ const blendBases = {
 const blendChoice = view(Inputs.select(Object.keys(blendBases), {value: "cubic Bézier", label: "basis"}));
 ```
 
-```js echo
+```js
 (() => {
   const B = blendBases[blendChoice], n = B.length;
   const rows = d3.range(0, 1.0001, 0.01).flatMap((u) => {
@@ -627,7 +808,7 @@ the **Lagrange** blending functions
 ${tex`b_i(t) = \prod_{j\ne i}(t - t_j)/(t_i - t_j)`}. Compare it with a
 Catmull–Rom spline (built in the Splines section) through the same points:
 
-```js echo
+```js
 const lagrangeWidget = dragPoints({
   A: {x: -3.2, y: -0.4}, B: {x: -2.2, y: 1.2}, C: {x: -1.1, y: -0.8}, D: {x: 0, y: 0.6},
   E: {x: 1.1, y: 1.4}, F: {x: 2.2, y: -0.2}, G: {x: 3.2, y: 0.8}
@@ -635,29 +816,42 @@ const lagrangeWidget = dragPoints({
 const lagrangePts = view(lagrangeWidget);
 ```
 
+The code follows the formula. The inner product is one blending function:
+
 ```js echo
-function lagrangeCurve(points) {
-  const n = points.length, ts = d3.range(n).map((i) => i / (n - 1));
-  return (t) => {
-    let x = 0, y = 0;
-    points.forEach((p, i) => {
-      let b = 1;
-      for (let j = 0; j < n; j++) if (j !== i) b *= (t - ts[j]) / (ts[i] - ts[j]);
-      x += b * p.x; y += b * p.y;
-    });
-    return {x, y};
-  };
+function lagrangeWeight(i, t, ts) {
+  return d3.range(ts.length).reduce((b, j) =>
+    j === i ? b : b * (t - ts[j]) / (ts[i] - ts[j]), 1);
 }
 ```
 
+At its own parameter value, a weight is 1, and at every other point's value it is 0. That is
+what makes the curve pass through the points. Weight 1 of three should be 0, 1, 0:
+
 ```js echo
+[0, 0.5, 1].map((t) => lagrangeWeight(1, t, [0, 0.5, 1]))
+```
+
+The curve spaces the parameters evenly and blends all of the points:
+
+```js echo
+function lagrangeCurve(points) {
+  const n = points.length, ts = d3.range(n).map((i) => i / (n - 1));
+  return (t) =>
+    combine(d3.range(n).map((i) => lagrangeWeight(i, t, ts)), points);
+}
+```
+
+```js
+{
 lagrangeWidget.redecorate((scene) => {
   const pts = Object.values(lagrangePts);
   drawPath(scene, sampleCurve(lagrangeCurve(pts), 300), {stroke: "orange", width: 2.5});
   // Catmull-Rom with the end points repeated so the curve reaches them
   const ext = [pts[0], ...pts, pts.at(-1)];
   drawPath(scene, d3.range(pts.length - 1).flatMap((i) => sampleCurve((u) => cardinalPoint(ext.slice(i, i + 4), u, 0), 30)), {stroke: "steelblue", width: 2.5});
-})
+});
+}
 ```
 
 The orange interpolating polynomial **overshoots** between the points,
@@ -677,12 +871,13 @@ start point and a **midpoint**, and gets its end point by
 **dependency**: ${tex`\text{end} = 2\,\text{mid} - \text{start}`},
 where each segment starts where the last one ended:
 
-```js echo
+```js
 const localityWidget = dragPoints({"p₀": {x: -3.4, y: -1}}, {width: 420, height: 260, domain: 3.8, colors: ["orangered"]});
 const localityP0 = view(localityWidget);
 ```
 
-```js echo
+```js
+{
 localityWidget.redecorate((scene) => {
   const ends = [{x: -3.4, y: -1}, {x: -2, y: 0.4}, {x: -0.6, y: -0.8}, {x: 0.8, y: 0.5}, {x: 2.2, y: -0.6}, {x: 3.5, y: 0.6}];
   const mids = d3.range(5).map((i) => lerp(ends[i], ends[i + 1], 0.5));
@@ -694,7 +889,8 @@ localityWidget.redecorate((scene) => {
   for (const m of mids) chain.push({x: 2 * m.x - chain.at(-1).x, y: 2 * m.y - chain.at(-1).y});
   drawPath(scene, chain, {stroke: "orangered", width: 2, dash: "6,3"});
   mids.forEach((m) => scene.svg.append("circle").attr("cx", scene.x(m.x)).attr("cy", scene.y(m.y)).attr("r", 3).attr("fill", "orange"));
-})
+});
+}
 ```
 
 Drag ${tex`p_0`}. The blue chain (shared endpoints) changes only its first
@@ -726,13 +922,13 @@ ${tex`P_2`}, ${tex`P_3`}, and ${tex`Q_1`} must be **collinear**. For
 ${tex`C^1`}, they must also be **equally spaced**. The dots mark equal
 steps of ${tex`u`} on each segment:
 
-```js echo
+```js
 const joinWidget = dragPoints({"P3 = Q0": {x: 0, y: 0}, "Q1": {x: 1.6, y: 2.1}}, {colors: ["seagreen", "purple"], domain: 4.2});
 const joinPts = view(joinWidget);
 const joinMode = view(Inputs.radio(["C⁰ (free)", "G¹ (collinear)", "C¹ (collinear and equal)"], {value: "C¹ (collinear and equal)", label: "join"}));
 ```
 
-```js echo
+```js
 const joinGeometry = (() => {
   const P0 = {x: -3, y: -0.5}, P1 = {x: -2, y: 1.8}, P2 = {x: -1, y: 1.3}, Q2 = {x: 2.5, y: -1.2}, Q3 = {x: 3.5, y: 0.3};
   const P3 = joinPts["P3 = Q0"], tin = vec2.sub(P3, P2);
@@ -743,17 +939,19 @@ const joinGeometry = (() => {
 })();
 ```
 
-```js echo
+```js
+{
 joinWidget.redecorate((scene) => {
   for (const [poly, stroke] of [[joinGeometry.A, "steelblue"], [joinGeometry.B, "#e07b39"]]) {
     drawPath(scene, poly, {stroke: "gray", width: 1, dash: "3,2"});
     drawPath(scene, sampleCurve((u) => bernsteinPoint(poly, u), 48), {stroke, width: 2.5});
     d3.range(1, 8).forEach((i) => drawPoint(scene, bernsteinPoint(poly, i / 8), {color: stroke, r: 2.5}));
   }
-})
+});
+}
 ```
 
-```js echo
+```js
 (() => {
   const [, , P2, P3] = joinGeometry.A, Q1 = joinGeometry.B[1];
   const d1 = vec2.scale(vec2.sub(P3, P2), 3), d2 = vec2.scale(vec2.sub(Q1, P3), 3);   // f₁'(1) and f₂'(0)
@@ -792,10 +990,10 @@ ${tex`\mathbf b(u) = \mathbf u B`}, and blend. Only ${tex`B`} and the
 gathering rule depend on the spline type:
 
 ```js echo
-function evalSegment(B, p, u) {                  // p: the segment's four control values, each {x, y}
+function evalSegment(B, p, u) {
   const U = [1, u, u * u, u * u * u];
-  const b = [0, 1, 2, 3].map((k) => d3.sum(U, (Ur, r) => Ur * B[r][k]));   // b = uB
-  return {x: d3.sum(b, (bk, k) => bk * p[k].x), y: d3.sum(b, (bk, k) => bk * p[k].y)};
+  const b = [0, 1, 2, 3].map((k) => d3.sum(U, (Ur, r) => Ur * B[r][k]));
+  return combine(b, p);
 }
 ```
 
@@ -804,7 +1002,8 @@ function evalSegment(B, p, u) {                  // p: the segment's four contro
 The control values are ${tex`\mathbf f(0), \mathbf f'(0), \mathbf f''(0), \mathbf f(1)`}:
 
 ```js echo
-const naturalB = basisMatrix(3, [{u: 0}, {u: 0, k: 1}, {u: 0, k: 2}, {u: 1}]);
+const naturalB =
+  basisMatrix(3, [{u: 0}, {u: 0, k: 1}, {u: 0, k: 2}, {u: 1}]);
 ```
 
 ${tex`B =`} ${showMatrix(naturalB)}
@@ -814,37 +1013,62 @@ spline is interpolating and ${tex`C^2`}. But every segment depends on all
 the ones before it, and the chain is **ill-conditioned**. Nudge the
 starting curvature slightly and watch the error grow down the chain:
 
+Multiplying ${tex`B`} by the control values gives the polynomial's coefficients:
+
+```js echo
+const segmentCoefficients = (B, p) => B.map((row) => combine(row, p));
+```
+
+From those coefficients ${tex`\mathbf a`}, we can evaluate the cubic. We can also compute its
+slope and curvature at ${tex`u = 1`}, which become the next segment's starting values:
+
+```js echo
+const cubicAt = (a, u) => combine([1, u, u * u, u * u * u], a);
+const slopeAtEnd = (a) => combine([0, 1, 2, 3], a);
+const curvatureAtEnd = (a) => combine([0, 0, 2, 6], a);
+```
+
+The chain passes those values along, which is exactly why each segment depends on all the ones
+before it:
+
 ```js echo
 function naturalChain(points, d0, dd0) {
-  const segments = [];
-  let start = points[0], d = d0, dd = dd0;
-  for (let i = 1; i < points.length; i++) {
-    const p = [start, d, dd, points[i]];
-    const a = naturalB.map((row) => ({x: d3.sum(row, (b, k) => b * p[k].x), y: d3.sum(row, (b, k) => b * p[k].y)}));   // a = Bp
-    const f = (u) => ({x: a[0].x + a[1].x * u + a[2].x * u * u + a[3].x * u ** 3, y: a[0].y + a[1].y * u + a[2].y * u * u + a[3].y * u ** 3});
-    segments.push(f);
-    // values at u = 1 become the next segment's starting constraints
-    d = {x: a[1].x + 2 * a[2].x + 3 * a[3].x, y: a[1].y + 2 * a[2].y + 3 * a[3].y};
-    dd = {x: 2 * a[2].x + 6 * a[3].x, y: 2 * a[2].y + 6 * a[3].y};
-    start = points[i];
-  }
-  return segments;
+  let d = d0, dd = dd0;
+  return points.slice(1).map((end, i) => {
+    const a = segmentCoefficients(naturalB, [points[i], d, dd, end]);
+    d = slopeAtEnd(a);
+    dd = curvatureAtEnd(a);
+    return (u) => cubicAt(a, u);
+  });
 }
-// The chain is affine in the starting slope. Pick the slope that makes the
-// last curvature zero too: that is the true natural spline (f'' = 0 at both ends).
+```
+
+We still need a starting slope. The chain's result is affine in that slope, so trying two slopes
+tells us which one makes the final curvature zero. That is the true natural spline, with
+${tex`\mathbf f'' = 0`} at both ends:
+
+```js echo
 function naturalSpline(points, nudge = 0) {
+  const zero = {x: 0, y: 0};
   const endCurvature = (d0) => {
-    const f = naturalChain(points, d0, {x: 0, y: 0}).at(-1), h = 1e-4;
-    return {x: (f(1).x - 2 * f(1 - h).x + f(1 - 2 * h).x) / h ** 2, y: (f(1).y - 2 * f(1 - h).y + f(1 - 2 * h).y) / h ** 2};
+    const f = naturalChain(points, d0, zero).at(-1), h = 1e-4;
+    const second = (c) =>
+      (f(1)[c] - 2 * f(1 - h)[c] + f(1 - 2 * h)[c]) / h ** 2;
+    return {x: second("x"), y: second("y")};
   };
-  const c0 = endCurvature({x: 0, y: 0}), c1 = endCurvature({x: 1, y: 1});
+  const c0 = endCurvature(zero), c1 = endCurvature({x: 1, y: 1});
   const d0 = {x: -c0.x / (c1.x - c0.x), y: -c0.y / (c1.y - c0.y)};
   return naturalChain(points, d0, {x: 0, y: nudge});
 }
-const naturalNudge = view(Inputs.range([-0.1, 0.1], {value: 0.01, step: 0.002, label: "change in the starting curvature f''(0)"}));
 ```
 
-```js echo
+```js
+const naturalNudge = view(
+  Inputs.range([-0.1, 0.1], {value: 0.01, step: 0.002, label: "change in the starting curvature f''(0)"})
+);
+```
+
+```js
 (() => {
   const pts = d3.range(7).map((i) => ({x: -3.3 + i * 1.1, y: [0, 0.8, -0.3, 0.6, -0.2, 0.7, 0][i]}));
   const scene = plane({width: 420, height: 300, domain: 3.8});
@@ -868,11 +1092,20 @@ spline is interpolating, local, and ${tex`C^1`}, but the user must supply
 the derivatives:
 
 ```js echo
-const hermiteB = basisMatrix(3, [{u: 0}, {u: 0, k: 1}, {u: 1}, {u: 1, k: 1}]);
-const hermitePoint = (control, u) => evalSegment(hermiteB, control, u);   // control: [p0, d0, p1, d1]
+const hermiteB =
+  basisMatrix(3, [{u: 0}, {u: 0, k: 1}, {u: 1}, {u: 1, k: 1}]);
+const hermitePoint = (control, u) => evalSegment(hermiteB, control, u);
 ```
 
 ${tex`B =`} ${showMatrix(hermiteB)}
+
+The control list is `[p0, d0, p1, d1]`. A straight run from (0, 0) to (1, 0) whose end slopes both
+equal its true slope, (1, 0), should simply be the line itself, reaching (0.25, 0) at
+${tex`u = 0.25`}:
+
+```js echo
+hermitePoint([{x: 0, y: 0}, {x: 1, y: 0}, {x: 1, y: 0}, {x: 1, y: 0}], 0.25)
+```
 
 ### Cardinal and Catmull–Rom splines
 
@@ -887,11 +1120,13 @@ ${tex`s = (1-\tau)/2`}. Tension ${tex`\tau = 0`} gives the
 ```js echo
 function cardinalPoint([p1, p2, p3, p4], u, tension) {
   const s = (1 - tension) / 2;
-  return hermitePoint([p2, vec2.scale(vec2.sub(p3, p1), s), p3, vec2.scale(vec2.sub(p4, p2), s)], u);
+  const startSlope = vec2.scale(vec2.sub(p3, p1), s);
+  const endSlope = vec2.scale(vec2.sub(p4, p2), s);
+  return hermitePoint([p2, startSlope, p3, endSlope], u);
 }
 ```
 
-```js echo
+```js
 const cardinalWidget = dragPoints({
   "1": {x: -3.4, y: -1.2}, "2": {x: -2.3, y: 0.9}, "3": {x: -0.6, y: 1.5}, "4": {x: 0.1, y: -0.9},
   "5": {x: 1.5, y: -1.1}, "6": {x: 2.3, y: 1.2}, "7": {x: 3.4, y: 0.5}
@@ -900,13 +1135,15 @@ const cardinalPts = view(cardinalWidget);
 const cardinalTension = view(Inputs.range([-0.5, 0.95], {value: 0, step: 0.05, label: "tension τ (0 = Catmull–Rom)"}));
 ```
 
-```js echo
+```js
+{
 cardinalWidget.redecorate((scene) => {
   const pts = Object.values(cardinalPts);
   drawPath(scene, pts, {stroke: "gray", width: 1, dash: "3,3"});
   d3.range(pts.length - 3).forEach((i) =>
     drawPath(scene, sampleCurve((u) => cardinalPoint(pts.slice(i, i + 4), u, cardinalTension), 40), {stroke: i % 2 ? "steelblue" : "seagreen", width: 2.5}));
-})
+});
+}
 ```
 
 Each colored segment is one cubic. Higher tension pulls the curve toward
@@ -944,10 +1181,20 @@ Segment ${tex`i`} uses the control values
 ${tex`\mathbf p_i \ldots \mathbf p_{i+3}`} and passes through none of them:
 
 ```js echo
-const bsplineB = [[1, 4, 1, 0], [-3, 0, 3, 0], [3, -6, 3, 0], [-1, 3, -3, 1]].map((r) => r.map((v) => v / 6));
+const bsplineB = [
+  [1, 4, 1, 0], [-3, 0, 3, 0], [3, -6, 3, 0], [-1, 3, -3, 1]
+].map((r) => r.map((v) => v / 6));
 ```
 
+The first row is ${tex`\mathbf b(0)`}. So at ${tex`u = 0`}, the curve is at
+${tex`(\mathbf p_0 + 4\mathbf p_1 + \mathbf p_2)/6`}, which is close to ${tex`\mathbf p_1`} but
+not on it. With ${tex`y`} values 0, 6, 0, and 0, that gives 4, not 6:
+
 ```js echo
+evalSegment(bsplineB, [0, 6, 0, 0].map((y) => ({x: 0, y})), 0).y
+```
+
+```js
 const bsWidget = dragPoints({
   P0: {x: -3.2, y: -1}, P1: {x: -2.3, y: 1.6}, P2: {x: -1, y: -1.4}, P3: {x: 0, y: 1.8},
   P4: {x: 1, y: -1.2}, P5: {x: 2.3, y: 1.4}, P6: {x: 3.2, y: -0.6}
@@ -955,13 +1202,15 @@ const bsWidget = dragPoints({
 const bsPts = view(bsWidget);
 ```
 
-```js echo
+```js
+{
 bsWidget.redecorate((scene) => {
   const pts = Object.values(bsPts);
   drawPath(scene, pts, {stroke: "gray", width: 1, dash: "3,2"});
   d3.range(pts.length - 3).forEach((i) =>
     drawPath(scene, sampleCurve((u) => evalSegment(bsplineB, pts.slice(i, i + 4), u), 40), {stroke: i % 2 ? "steelblue" : "seagreen", width: 3}));
-})
+});
+}
 ```
 
 ${html`<p style="font:12px var(--sans-serif)">${showMatrix(bsplineB)}</p>`}
@@ -985,7 +1234,7 @@ The GPU rasterizes only points, lines, and triangles, so every curve is
 
 Both canvases below draw the cubic Bézier from the de Casteljau figure:
 
-```js echo
+```js
 const {device, format: canvasFormat} = await initializeWebGPU(document.createElement("canvas"));   // a blank canvas: each demo adds its own below
 const deviceErrorLog = document.createElement("pre");
 deviceErrorLog.style.cssText = "display: none; color: #e5484d; background: #2a1214; border: 1px solid #e5484d; border-radius: 6px; padding: 8px 12px; font-size: 12px; white-space: pre-wrap;";
@@ -999,15 +1248,15 @@ const makeCanvas = async (width, height) => {
 };
 ```
 
-```js echo
+```js
 deviceErrorLog
 ```
 
-```js echo
+```js
 const gpuSegments = view(Inputs.range([2, 128], {value: 24, step: 1, label: "segments N"}));
 ```
 
-```js echo
+```js
 (() => {
   const row = document.createElement("div");
   row.style.cssText = "display:flex; gap:16px; flex-wrap:wrap";
@@ -1031,14 +1280,19 @@ Evaluate ${tex`N + 1`} points with `bernsteinPoint`, convert them to clip
 space, and upload them every time the curve changes:
 
 ```js echo
-const MAX_SEGMENTS = 128;
-const cpuCurveBuffer = device.createBuffer({size: 8 * (MAX_SEGMENTS + 1), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST});
-const toNDC = (p) => [p.x / 3.6, p.y / 3.6];      // the drag widget spans [-3.6, 3.6]
+const toNDC = (p) => [p.x / 3.6, p.y / 3.6];   // the drag widget spans ±3.6
 function tessellateBezier(controls, N) {
   const pts = new Float32Array(2 * (N + 1));
-  for (let i = 0; i <= N; i++) pts.set(toNDC(bernsteinPoint(controls, i / N)), 2 * i);
+  for (let i = 0; i <= N; i++) {
+    pts.set(toNDC(bernsteinPoint(controls, i / N)), 2 * i);
+  }
   return pts;
 }
+```
+
+```js
+const MAX_SEGMENTS = 128;
+const cpuCurveBuffer = device.createBuffer({size: 8 * (MAX_SEGMENTS + 1), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST});
 ```
 
 The pipeline uses `topology: "line-strip"` and a vertex buffer with one
@@ -1051,75 +1305,58 @@ Here the shader gets only the four control points in a uniform, and
 vertex buffer at all. One module holds every entry point used in this
 section:
 
-```js echo
-const curveModule = device.createShaderModule({code: `
-struct Curve {
-  p : array<vec4f, 4>,      // vec4f keeps the 16-byte array stride
-  segments : u32,           // byte offset 64
-  viewport : vec2f,         // canvas size in pixels, byte offset 72
-  widthPx : f32,            // byte offset 80
-  pixelNormal : u32,        // byte offset 84: 1 = normal in pixels, 0 = in clip space
-};                          // 96 bytes in all
-@group(0) @binding(0) var<uniform> curve : Curve;
+First, the uniform. Its gaps are explained in the next section. An `array<vec4f, 4>` is needed
+because uniform array elements must be 16 bytes apart:
 
+```js echo
+const wgslCurveUniform = `
+struct Curve {
+  p : array<vec4f, 4>,
+  segments : u32,
+  viewport : vec2f,
+  widthPx : f32,
+  pixelNormal : u32,
+};
+@group(0) @binding(0) var<uniform> curve : Curve;`;
+```
+
+The Bernstein form and the derivative are the same formulas as our JavaScript versions:
+
+```js echo
+const wgslBezier = `
 fn bezier(u : f32) -> vec2f {
   let a = 1.0 - u;
   return (a * a * a * curve.p[0] + 3.0 * a * a * u * curve.p[1]
-        + 3.0 * a * u * u * curve.p[2] + u * u * u * curve.p[3]).xy;      // Bernstein form
-}
+    + 3.0 * a * u * u * curve.p[2] + u * u * u * curve.p[3]).xy;
+}`;
+```
+
+```js echo
+const wgslBezierTangent = `
 fn bezierTangent(u : f32) -> vec2f {
   let a = 1.0 - u;
-  return (3.0 * (a * a * (curve.p[1] - curve.p[0]) + 2.0 * a * u * (curve.p[2] - curve.p[1])
-        + u * u * (curve.p[3] - curve.p[2]))).xy;                         // f'(u)
-}
+  return (3.0 * (a * a * (curve.p[1] - curve.p[0])
+    + 2.0 * a * u * (curve.p[2] - curve.p[1])
+    + u * u * (curve.p[3] - curve.p[2]))).xy;
+}`;
+```
 
+Two entry points draw thin curves. One takes the CPU's tessellated points. The other turns the
+vertex index into the parameter, so it needs no vertex buffer at all:
+
+```js echo
+const wgslThinCurves = `
 @vertex
-fn vs_cpu(@location(0) p : vec2f) -> @builtin(position) vec4f {          // CPU-tessellated points
+fn vs_cpu(@location(0) p : vec2f) -> @builtin(position) vec4f {
   return vec4f(p, 0.0, 1.0);
 }
-
 @vertex
 fn vs_line(@builtin(vertex_index) i : u32) -> @builtin(position) vec4f {
   return vec4f(bezier(f32(i) / f32(curve.segments)), 0.0, 1.0);
-}
-
-@vertex
-fn vs_thick(@builtin(vertex_index) i : u32) -> @builtin(position) vec4f {
-  let u = f32(i / 2u) / f32(curve.segments);                   // two vertices per sample
-  let side = select(-1.0, 1.0, (i & 1u) == 1u);
-  let toPixels = select(vec2f(1.0), curve.viewport, curve.pixelNormal == 1u);
-  var dir = bezierTangent(u) * toPixels;                       // tangent on screen
-  if (dot(dir, dir) < 1e-8) {                                  // collapsed handle: f' = 0
-    dir = select(curve.p[3] - curve.p[1], curve.p[2] - curve.p[0], u < 0.5).xy * toPixels;
-  }
-  let n = normalize(vec2f(-dir.y, dir.x));                     // perpendicular to the tangent
-  let offset = select(n * curve.widthPx / curve.viewport.y,    // wrong: same clip-space distance in x and y
-                      n * curve.widthPx / curve.viewport,      // (w/2) px × 2/viewport
-                      curve.pixelNormal == 1u);
-  return vec4f(bezier(u) + side * offset, 0.0, 1.0);
-}
-
-@fragment
-fn fs_main() -> @location(0) vec4f { return vec4f(0.95, 0.55, 0.2, 1.0); }`});
-
-const makeCurvePipeline = (entryPoint, topology, buffers = []) => device.createRenderPipeline({
-  layout: "auto",
-  vertex: {module: curveModule, entryPoint, buffers},
-  fragment: {module: curveModule, entryPoint: "fs_main", targets: [{format: canvasFormat}]},
-  primitive: {topology}
-});
-const cpuLinePipeline = makeCurvePipeline("vs_cpu", "line-strip", [{arrayStride: 8, attributes: [{shaderLocation: 0, offset: 0, format: "float32x2"}]}]);
-const linePipeline = makeCurvePipeline("vs_line", "line-strip");
-const thickPipeline = makeCurvePipeline("vs_thick", "triangle-strip");
-const curveUniforms = device.createBuffer({size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
-const curveBindGroup = (pipeline) => device.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries: [{binding: 0, resource: {buffer: curveUniforms}}]});
-const cpuTarget = await makeCanvas(300, 300);
-const gpuLineTarget = {...(await makeCanvas(300, 300)), bindGroup: curveBindGroup(linePipeline)};
-const thickTarget = {...(await makeCanvas(420, 260)), bindGroup: curveBindGroup(thickPipeline)};
+}`;
 ```
 
-The vertex shader uses the same Bernstein form as `bernsteinPoint`. Drag
-the control points in the de Casteljau figure: the CPU canvas re-uploads
+Drag the control points in the de Casteljau figure: the CPU canvas re-uploads
 ${tex`2(N+1)`} floats, while the GPU canvas re-uploads only the 96-byte
 uniform.
 
@@ -1143,19 +1380,41 @@ apart, which is why `Curve` uses `array<vec4f, 4>` instead of
 a layout before writing the JavaScript that fills it:
 
 ```js echo
-const wgslTypes = {f32: [4, 4], u32: [4, 4], i32: [4, 4], vec2f: [8, 8], vec3f: [16, 12], vec4f: [16, 16], mat4x4f: [16, 64], "array<vec4f, 4>": [16, 64]};
-function wgslLayout(fields) {                     // fields: [[name, type], ...]
+const wgslTypes = {   // [align, size]
+  f32: [4, 4], u32: [4, 4], i32: [4, 4], vec2f: [8, 8], vec3f: [16, 12],
+  vec4f: [16, 16], mat4x4f: [16, 64], "array<vec4f, 4>": [16, 64]
+};
+```
+
+Each field starts at the next multiple of its alignment, and the total is rounded up to the largest
+alignment:
+
+```js echo
+function wgslLayout(fields) {
   let offset = 0, structAlign = 0;
   const rows = fields.map(([field, type]) => {
     const [align, size] = wgslTypes[type];
     const start = Math.ceil(offset / align) * align;
-    const row = {field, type, align, size, "byte offset": start, "float index": start / 4, "padding before": start - offset};
+    const padding = start - offset;
     offset = start + size;
     structAlign = Math.max(structAlign, align);
-    return row;
+    return {field, type, align, size, "byte offset": start,
+      "float index": start / 4, "padding before": padding};
   });
   return {rows, size: Math.ceil(offset / structAlign) * structAlign};
 }
+```
+
+An `f32` followed by a `vec3f` shows the gap: the `vec3f` can't start at byte 4, so it moves to byte
+16. It ends at byte 28, and the size rounds up to 32:
+
+```js echo
+wgslLayout([["a", "f32"], ["b", "vec3f"]]).size
+```
+
+Choose a struct to see its full layout:
+
+```js
 const wgslStructs = {
   "Light": [["intensity", "f32"], ["direction", "vec3f"], ["color", "vec3f"], ["radius", "f32"]],
   "Light, reordered": [["direction", "vec3f"], ["intensity", "f32"], ["color", "vec3f"], ["radius", "f32"]],
@@ -1164,7 +1423,7 @@ const wgslStructs = {
 const structChoice = view(Inputs.select(Object.keys(wgslStructs), {label: "struct"}));
 ```
 
-```js echo
+```js
 (() => {
   const {rows, size} = wgslLayout(wgslStructs[structChoice]);
   return html`${Inputs.table(rows)}<p style="font:12px var(--sans-serif)">size: ${size} bytes = ${size / 4} floats</p>`;
@@ -1184,13 +1443,19 @@ silently reads the wrong numbers.
 
 ```js echo
 const curveData = new ArrayBuffer(96);
-const curveF32 = new Float32Array(curveData), curveU32 = new Uint32Array(curveData);
-function writeCurveUniform({controls, segments, viewport, widthPx, pixelNormal}) {
-  curveF32.set(controls.flatMap((p) => [...toNDC(p), 0, 1]), 0);   // p: floats 0-15
-  curveU32[16] = segments;                                         // byte 64, a u32
-  curveF32.set(viewport, 18);                                      // byte 72 (68-71 are padding)
-  curveF32[20] = widthPx;                                          // byte 80
-  curveU32[21] = pixelNormal ? 1 : 0;                              // byte 84, a u32
+const curveF32 = new Float32Array(curveData);
+const curveU32 = new Uint32Array(curveData);
+```
+
+Each index below is the field's byte offset divided by 4:
+
+```js echo
+function writeCurveUniform(curve) {
+  curveF32.set(curve.controls.flatMap((p) => [...toNDC(p), 0, 1]), 0);
+  curveU32[16] = curve.segments;              // byte 64, a u32
+  curveF32.set(curve.viewport, 18);           // byte 72; 68-71 are padding
+  curveF32[20] = curve.widthPx;               // byte 80
+  curveU32[21] = curve.pixelNormal ? 1 : 0;   // byte 84, a u32
   device.queue.writeBuffer(curveUniforms, 0, curveData);
 }
 ```
@@ -1210,38 +1475,90 @@ per sample, pushed apart along the normal ${tex`(-f'_y, f'_x)`}, with
   ${tex`P_0`}), the normal is undefined, so the shader falls back to
   another direction.
 
+The stroke's half-width is in pixels. Multiplying the tangent by `toPixels` puts it in pixel units,
+and the rotated normal then converts back to clip space, where the full canvas spans 2 units:
+
 ```js echo
+const wgslStrokeOffset = `
+fn strokeOffset(u : f32) -> vec2f {
+  let toPixels = select(vec2f(1.0), curve.viewport, curve.pixelNormal == 1u);
+  var dir = bezierTangent(u) * toPixels;
+  if (dot(dir, dir) < 1e-8) {      // collapsed handle: f' = 0
+    dir = select(curve.p[3] - curve.p[1],
+      curve.p[2] - curve.p[0], u < 0.5).xy * toPixels;
+  }
+  let n = normalize(vec2f(-dir.y, dir.x));
+  return select(n * curve.widthPx / curve.viewport.y,
+    n * curve.widthPx / curve.viewport, curve.pixelNormal == 1u);
+}`;
+```
+
+The vertex shader uses two vertices per sample, one on each side of the curve:
+
+```js echo
+const wgslThickVertex = `
+@vertex
+fn vs_thick(@builtin(vertex_index) i : u32) -> @builtin(position) vec4f {
+  let u = f32(i / 2u) / f32(curve.segments);
+  let side = select(-1.0, 1.0, (i & 1u) == 1u);
+  return vec4f(bezier(u) + side * strokeOffset(u), 0.0, 1.0);
+}`;
+```
+
+```js
+const curveModule = device.createShaderModule({code: [wgslCurveUniform, wgslBezier, wgslBezierTangent,
+  wgslThinCurves, wgslStrokeOffset, wgslThickVertex,
+  `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(0.95, 0.55, 0.2, 1.0); }`].join("\n")});
+const makeCurvePipeline = (entryPoint, topology, buffers = []) => device.createRenderPipeline({
+  layout: "auto",
+  vertex: {module: curveModule, entryPoint, buffers},
+  fragment: {module: curveModule, entryPoint: "fs_main", targets: [{format: canvasFormat}]},
+  primitive: {topology}
+});
+const cpuLinePipeline = makeCurvePipeline("vs_cpu", "line-strip", [{arrayStride: 8, attributes: [{shaderLocation: 0, offset: 0, format: "float32x2"}]}]);
+const linePipeline = makeCurvePipeline("vs_line", "line-strip");
+const thickPipeline = makeCurvePipeline("vs_thick", "triangle-strip");
+const curveUniforms = device.createBuffer({size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
+const curveBindGroup = (pipeline) => device.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries: [{binding: 0, resource: {buffer: curveUniforms}}]});
+const cpuTarget = await makeCanvas(300, 300);
+const gpuLineTarget = {...(await makeCanvas(300, 300)), bindGroup: curveBindGroup(linePipeline)};
+const thickTarget = {...(await makeCanvas(420, 260)), bindGroup: curveBindGroup(thickPipeline)};
+```
+
+```js
 const thickForm = view(Inputs.form({
   width: Inputs.range([1, 40], {value: 14, step: 1, label: "width (pixels)"}),
   normal: Inputs.radio(["pixels", "clip space"], {value: "pixels", label: "compute the normal in"})
 }));
 ```
 
-```js echo
+```js
 html`<div style="font:12px var(--sans-serif); opacity:.65; margin-bottom:4px">GPU: vertex shader, triangle-strip</div>${thickTarget.canvas}`
 ```
 
+Each frame, the three canvases differ only in their pipeline and vertex count. The CPU line has a
+vertex buffer. The GPU line has none, and the thick curve needs two vertices per sample:
+
 ```js echo
+function encodeCurveDraw(pass, pipeline, bindGroup, vertexCount) {
+  pass.setPipeline(pipeline);
+  if (bindGroup) pass.setBindGroup(0, bindGroup);
+  else pass.setVertexBuffer(0, cpuCurveBuffer);
+  pass.draw(vertexCount);
+  pass.end();
+}
+```
+
+```js
 {
-  writeCurveUniform({controls: dcControls, segments: gpuSegments, viewport: [420, 260], widthPx: thickForm.width, pixelNormal: thickForm.normal === "pixels"});
+  writeCurveUniform({controls: dcControls, segments: gpuSegments, viewport: [420, 260],
+    widthPx: thickForm.width, pixelNormal: thickForm.normal === "pixels"});
   device.queue.writeBuffer(cpuCurveBuffer, 0, tessellateBezier(dcControls, gpuSegments));
   const encoder = device.createCommandEncoder();
   const beginPass = ({context}) => encoder.beginRenderPass({colorAttachments: [{view: context.getCurrentTexture().createView(), clearValue: {r: 0.05, g: 0.05, b: 0.08, a: 1}, loadOp: "clear", storeOp: "store"}]});
-  let pass = beginPass(cpuTarget);
-  pass.setPipeline(cpuLinePipeline);
-  pass.setVertexBuffer(0, cpuCurveBuffer);
-  pass.draw(gpuSegments + 1);
-  pass.end();
-  pass = beginPass(gpuLineTarget);
-  pass.setPipeline(linePipeline);
-  pass.setBindGroup(0, gpuLineTarget.bindGroup);
-  pass.draw(gpuSegments + 1);                       // no vertex buffer: vertex_index is the sample number
-  pass.end();
-  pass = beginPass(thickTarget);
-  pass.setPipeline(thickPipeline);
-  pass.setBindGroup(0, thickTarget.bindGroup);
-  pass.draw(2 * (gpuSegments + 1));
-  pass.end();
+  encodeCurveDraw(beginPass(cpuTarget), cpuLinePipeline, null, gpuSegments + 1);
+  encodeCurveDraw(beginPass(gpuLineTarget), linePipeline, gpuLineTarget.bindGroup, gpuSegments + 1);
+  encodeCurveDraw(beginPass(thickTarget), thickPipeline, thickTarget.bindGroup, 2 * (gpuSegments + 1));
   device.queue.submit([encoder.finish()]);
 }
 ```
@@ -1257,32 +1574,51 @@ buffer's `array<vec2f>` is packed tightly, 8 bytes apart, and its length
 is not fixed in the shader (Module 07). Here each curve is a blade of
 grass, and a time uniform sways the upper control points:
 
+The vertex shader reads the blade's four control points, sways the upper two, and evaluates the
+Bernstein form. The sway depends on the blade's number, so the blades do not move in lockstep:
+
 ```js echo
-const grassModule = device.createShaderModule({code: `
-struct Field { samples : u32, time : f32 };
-@group(0) @binding(0) var<storage, read> pts : array<vec2f>;   // 4 control points per curve
-@group(0) @binding(1) var<uniform> field : Field;
-
-struct VSOut { @builtin(position) pos : vec4f, @location(0) color : vec3f };
-
+const wgslBladeVertex = `
 @vertex
-fn vs_blade(@builtin(vertex_index) i : u32, @builtin(instance_index) blade : u32) -> VSOut {
+fn vs_blade(@builtin(vertex_index) i : u32,
+            @builtin(instance_index) blade : u32) -> VSOut {
   let p0 = pts[4u * blade];      let p1 = pts[4u * blade + 1u];
   var p2 = pts[4u * blade + 2u]; var p3 = pts[4u * blade + 3u];
-  let sway = 0.04 * sin(2.0 * field.time + 0.9 * f32(blade));  // wind moves only the upper points
+  let sway = 0.04 * sin(2.0 * field.time + 0.9 * f32(blade));
   p2.x += 0.5 * sway;
   p3.x += sway;
   let u = f32(i) / f32(field.samples);
   let a = 1.0 - u;
-  var out : VSOut;
-  out.pos = vec4f(a * a * a * p0 + 3.0 * a * a * u * p1 + 3.0 * a * u * u * p2 + u * u * u * p3, 0.0, 1.0);
-  out.color = mix(vec3f(0.1, 0.35, 0.1), vec3f(0.55, 0.85, 0.3), u);   // darker at the root
-  return out;
-}
+  let f = a * a * a * p0 + 3.0 * a * a * u * p1
+    + 3.0 * a * u * u * p2 + u * u * u * p3;
+  return VSOut(vec4f(f, 0.0, 1.0),
+    mix(vec3f(0.1, 0.35, 0.1), vec3f(0.55, 0.85, 0.3), u));
+}`;
+```
 
+Each blade is rooted on the bottom edge at a random ${tex`x`}, with a random height and lean. Its four
+control points are evenly spaced up the blade and lean progressively further:
+
+```js echo
+function bladeControlPoints(x, h, lean) {
+  return [
+    x, -1,
+    x + 0.02 * lean, -1 + h / 3,
+    x + 0.5 * lean, -1 + (2 * h) / 3,
+    x + lean, -1 + h
+  ];
+}
+```
+
+```js
+const grassModule = device.createShaderModule({code: `
+struct Field { samples : u32, time : f32 };
+@group(0) @binding(0) var<storage, read> pts : array<vec2f>;
+@group(0) @binding(1) var<uniform> field : Field;
+struct VSOut { @builtin(position) pos : vec4f, @location(0) color : vec3f };
+${wgslBladeVertex}
 @fragment
 fn fs_blade(@location(0) color : vec3f) -> @location(0) vec4f { return vec4f(color, 1.0); }`});
-
 const grassPipeline = device.createRenderPipeline({
   layout: "auto",
   vertex: {module: grassModule, entryPoint: "vs_blade"},
@@ -1295,20 +1631,20 @@ const bladeBuffer = device.createBuffer({size: MAX_BLADES * 4 * 8, usage: GPUBuf
   const rand = d3.randomLcg(7), data = new Float32Array(MAX_BLADES * 8);
   for (let k = 0; k < MAX_BLADES; k++) {
     const x = -0.98 + 1.96 * rand(), h = 0.4 + 1.1 * rand(), lean = (rand() - 0.5) * 0.5;
-    data.set([x, -1, x + 0.02 * lean, -1 + h / 3, x + 0.5 * lean, -1 + (2 * h) / 3, x + lean, -1 + h], 8 * k);
+    data.set(bladeControlPoints(x, h, lean), 8 * k);
   }
-  device.queue.writeBuffer(bladeBuffer, 0, data);     // uploaded once
+  device.queue.writeBuffer(bladeBuffer, 0, data);
 }
 const fieldData = new ArrayBuffer(8), fieldU32 = new Uint32Array(fieldData), fieldF32 = new Float32Array(fieldData);
 const fieldUniform = device.createBuffer({size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
 const grassBindGroup = device.createBindGroup({layout: grassPipeline.getBindGroupLayout(0), entries: [
   {binding: 0, resource: {buffer: bladeBuffer}}, {binding: 1, resource: {buffer: fieldUniform}}]});
 const grassTarget = await makeCanvas(420, 260);
-grassTarget.canvas.style.width = "420px";        // animate() sizes the canvas from its CSS size
+grassTarget.canvas.style.width = "420px";
 grassTarget.canvas.style.height = "260px";
 ```
 
-```js echo
+```js
 const grassForm = view(Inputs.form({
   count: Inputs.range([1, MAX_BLADES], {value: 600, step: 1, label: "curves (instances)"}),
   samples: Inputs.range([1, 32], {value: 12, step: 1, label: "segments per curve"})
@@ -1321,22 +1657,26 @@ buffer, so it passes `depth: false`. `animate` returns a function that stops
 the loop, which this cell calls when a control change re-runs it:
 
 ```js echo
+function drawGrass({renderPass, time}) {
+  fieldU32[0] = grassForm.samples;
+  fieldF32[1] = time;
+  device.queue.writeBuffer(fieldUniform, 0, fieldData);
+  renderPass.setPipeline(grassPipeline);
+  renderPass.setBindGroup(0, grassBindGroup);
+  renderPass.draw(grassForm.samples + 1, grassForm.count);   // 1 per curve
+}
+```
+
+The loop just passes that function to `animate`. The canvas goes on the page first, so that
+`animate` can measure it:
+
+```js echo
 {
-  display(grassTarget.canvas);   // on the page first, so animate() can measure it
+  display(grassTarget.canvas);
   const stop = animate({
-    canvas: grassTarget.canvas,
-    device,
-    context: grassTarget.context,
-    depth: false,
-    clearColor: {r: 0.55, g: 0.75, b: 0.95, a: 1},
-    onFrame: ({renderPass, time}) => {
-      fieldU32[0] = grassForm.samples;
-      fieldF32[1] = time;
-      device.queue.writeBuffer(fieldUniform, 0, fieldData);
-      renderPass.setPipeline(grassPipeline);
-      renderPass.setBindGroup(0, grassBindGroup);
-      renderPass.draw(grassForm.samples + 1, grassForm.count);   // one instance per curve
-    }
+    canvas: grassTarget.canvas, device, context: grassTarget.context,
+    depth: false, clearColor: {r: 0.55, g: 0.75, b: 0.95, a: 1},
+    onFrame: drawGrass
   });
   invalidation.then(stop);
 }
@@ -1368,26 +1708,47 @@ function arcLengthTable(f, samples = 400) {
   const table = [{u: 0, s: 0}];
   let prev = f(0);
   for (let i = 1; i <= samples; i++) {
-    const p = f(i / samples);
-    table.push({u: i / samples, s: table.at(-1).s + Math.hypot(p.x - prev.x, p.y - prev.y)});
+    const p = f(i / samples), chord = Math.hypot(p.x - prev.x, p.y - prev.y);
+    table.push({u: i / samples, s: table.at(-1).s + chord});
     prev = p;
   }
   return table;
 }
+```
+
+The binary search finds the two table rows around a distance, and a lerp between them gives the
+parameter:
+
+```js echo
 function uAtDistance(table, s) {
   let lo = 0, hi = table.length - 1;
-  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (table[mid].s < s) lo = mid; else hi = mid; }
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (table[mid].s < s) lo = mid;
+    else hi = mid;
+  }
   const a = table[lo], b = table[hi];
   return a.u + (b.s > a.s ? (s - a.s) / (b.s - a.s) : 0) * (b.u - a.u);
 }
+```
+
+Test it on a curve whose answer we know. For ${tex`\mathbf f(u) = (3u^2, 4u^2)`}, a straight path of
+length 5 traveled unevenly, half of the distance is reached when ${tex`u^2 = \tfrac12`}, so
+${tex`u \approx 0.707`}, not 0.5:
+
+```js echo
+uAtDistance(arcLengthTable((u) => ({x: 3 * u * u, y: 4 * u * u})), 2.5)
+```
+
+```js
 const travelTable = arcLengthTable((u) => bernsteinPoint(dcControls, u));
 ```
 
-```js echo
+```js
 const travelFraction = (now / 4000) % 1;   // one loop every 4 seconds
 ```
 
-```js echo
+```js
 (() => {
   const scene = plane({domain: 3.6});
   const f = (u) => bernsteinPoint(dcControls, u);
@@ -1460,6 +1821,9 @@ f 5 6 7 8
 f 1 5 8 4
 f 2 3 7 6
 `;
+```
+
+```js echo
 const signMTLText = `newmtl Wood
 Kd 0.55 0.35 0.18
 Ks 0.05 0.05 0.05
@@ -1470,6 +1834,9 @@ Kd 0.1 0.45 0.8
 Ks 0.6 0.6 0.6
 Ns 120
 `;
+```
+
+```js echo
 const signParsed = obj.parseOBJ(signOBJText);
 const signMTL = obj.parseMTL(signMTLText);
 ```
@@ -1479,23 +1846,31 @@ Sorting them by material gives one group per material, each a
 `{material, first, count}` range of the index buffer, drawn with
 `drawIndexed(count, 1, first)` after binding that material:
 
-```js echo
+```js
 const signRuns = signParsed.triangles.map((t) => t.material).reduce((runs, material, i) => {
   if (runs.length && runs.at(-1).material === material) runs.at(-1).triangles++;
   else runs.push({material, "first triangle": i, triangles: 1});
   return runs;
 }, []);
-const signGroups = (() => {
-  let first = 0;
-  return [...objMesh.groupTrianglesByMaterial(signParsed.triangles)].map(([material, triangles]) => {
-    const group = {material, first, count: 3 * triangles.length, Kd: signMTL[material].Kd.join(" ")};
-    first += group.count;
-    return group;
-  });
-})();
 ```
 
+To build the groups, we keep a running start position in the index buffer, 3 indices per triangle:
+
 ```js echo
+function materialRanges(triangles) {
+  let first = 0;
+  return [...objMesh.groupTrianglesByMaterial(triangles)].map(
+    ([material, group]) => {
+      const range = {material, first, count: 3 * group.length};
+      first += range.count;
+      return range;
+    });
+}
+const signGroups = materialRanges(signParsed.triangles)
+  .map((g) => ({...g, Kd: signMTL[g.material].Kd.join(" ")}));
+```
+
+```js
 html`<div style="display:flex; gap:24px; flex-wrap:wrap">
   <div><b>In file order</b>${Inputs.table(signRuns)}</div>
   <div><b>Grouped for drawing</b>${Inputs.table(signGroups)}</div>
@@ -1515,20 +1890,35 @@ extent to 2, so it fits in ${tex`[-1, 1]^3`}:
 
 ```js echo
 function boundingBox(positions) {
-  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
-  for (const p of positions) p.forEach((v, c) => { min[c] = Math.min(min[c], v); max[c] = Math.max(max[c], v); });
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (const p of positions) p.forEach((v, c) => {
+    min[c] = Math.min(min[c], v);
+    max[c] = Math.max(max[c], v);
+  });
   return {min, max};
 }
+```
+
+Fitting subtracts the center and scales by the size of the largest extent:
+
+```js echo
 function fitToUnitBox(positions, {min, max}) {
   const center = min.map((v, c) => (v + max[c]) / 2);
-  const scale = 2 / Math.max(...max.map((v, c) => v - min[c]));   // the largest extent becomes 2
+  const scale = 2 / Math.max(...max.map((v, c) => v - min[c]));
   return positions.map((p) => p.map((v, c) => (v - center[c]) * scale));
 }
 const signBox = boundingBox(signParsed.positions);
 const signFitted = fitToUnitBox(signParsed.positions, signBox);
 ```
 
+The signpost is 200 units tall, its largest extent, so its height should now run exactly from −1 to 1:
+
 ```js echo
+[boundingBox(signFitted).min[1], boundingBox(signFitted).max[1]]
+```
+
+```js
 (() => {
   // a side view (x, y) of every triangle's outline, in its material's Kd
   const sideView = (positions, domain) => Plot.plot({

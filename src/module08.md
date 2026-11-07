@@ -3,7 +3,7 @@ title: Module 08 — Texture Mapping
 toc: true
 ---
 
-```js echo
+```js
 import * as d3 from "npm:d3";
 import * as mat4 from "./lib/math/mat4.js";
 import * as transforms from "./lib/math/transforms.js";
@@ -31,10 +31,12 @@ This page works through both, then applies textures to shading
 parameters, normals, shadows, and reflections, and finally builds 3D
 procedural textures. Most demos are plain JavaScript. The ones that need
 the GPU use WebGPU and need **Chrome or Edge 113+**. The WebGPU API calls
-are explained in the last section. This handout teaches the *techniques*;
-it is not a walkthrough of any graded assignment.
+are explained in the last section. The code is part of the reading: each lookup,
+filter, and shader is built in small, tested steps, while the code that only prepares
+and draws the demos stays out of sight. This handout teaches the *techniques*; it is
+not a walkthrough of any graded assignment.
 
-```js echo
+```js
 const {device, format: canvasFormat} = await initializeWebGPU(document.createElement("canvas"));   // a blank canvas: each demo adds its own below
 
 const deviceErrorLog = document.createElement("pre");
@@ -84,7 +86,7 @@ function imageCanvas(width, height, pixel, scale = 1) {
 }
 ```
 
-```js echo
+```js
 deviceErrorLog
 ```
 
@@ -98,28 +100,53 @@ texel. A shader asks the surface for the texture coordinates of its
 shading point, then uses the looked-up color, for example as the diffuse
 color:
 
+We store a texture as plain data: its width, its height, and an RGB array in scanline
+order, the layout from Module 02. `pixel(i, j)` supplies the color of each texel:
+
 ```js echo
-// A texture as plain data: width, height, and an RGB array.
 function makeTexture(width, height, pixel) {
   const data = new Float32Array(width * height * 3);
-  for (let j = 0; j < height; j++) for (let i = 0; i < width; i++) data.set(pixel(i, j), 3 * (j * width + i));
+  for (let j = 0; j < height; j++) for (let i = 0; i < width; i++) {
+    data.set(pixel(i, j), 3 * (j * width + i));
+  }
   return {width, height, data};
 }
-const texel = (t, i, j) => t.data.subarray(3 * (j * t.width + i), 3 * (j * t.width + i) + 3);
+```
 
-// The reading's texture_lookup: round to the nearest texel center.
+Reading a texel returns its three values:
+
+```js echo
+const texel = (t, i, j) => {
+  const start = 3 * (j * t.width + i);
+  return t.data.subarray(start, start + 3);
+};
+```
+
+The reading's `texture_lookup` finds the nearest texel. Texel ${tex`i`}'s center is at
+${tex`u = (i + \tfrac12)/n_u`}, so we solve for ${tex`i`} and round, clamping at the
+borders:
+
+```js echo
+const clampIndex = (i, n) => Math.min(n - 1, Math.max(0, i));
 function textureLookup(t, u, v) {
-  const i = Math.min(t.width - 1, Math.max(0, Math.round(u * t.width - 0.5)));
-  const j = Math.min(t.height - 1, Math.max(0, Math.round(v * t.height - 0.5)));
+  const i = clampIndex(Math.round(u * t.width - 0.5), t.width);
+  const j = clampIndex(Math.round(v * t.height - 0.5), t.height);
   return texel(t, i, j);
 }
+```
+
+Test it on a 2 × 2 texture whose red channel holds the texel's number. The point
+${tex`(0.75, 0.25)`} is the center of the texel in column 1, row 0, which is number 1:
+
+```js echo
+textureLookup(makeTexture(2, 2, (i, j) => [j * 2 + i, 0, 0]), 0.75, 0.25)
 ```
 
 Our test texture is a **numbered grid**, the standard tool for seeing
 how a mapping stretches a texture. Each cell is colored by its row and
 column, and a few cells carry a marker so that you can tell up from down:
 
-```js echo
+```js
 const gridTexture = makeTexture(128, 128, (i, j) => {
   const cu = Math.floor(i / 16), cv = Math.floor(j / 16);
   const base = d3.rgb(d3.interpolateRainbow(cu / 8));
@@ -130,8 +157,12 @@ const gridTexture = makeTexture(128, 128, (i, j) => {
 });
 ```
 
-```js echo
-imageCanvas(128, 128, (x, y) => textureLookup(gridTexture, (x + 0.5) / 128, 1 - (y + 0.5) / 128), 1.5)
+```js
+imageCanvas(
+  128, 128,
+  (x, y) => textureLookup(gridTexture, (x + 0.5) / 128, 1 - (y + 0.5) / 128),
+  1.5
+)
 ```
 
 (Here ${tex`v = 0`} is the bottom row, as in the reading.)
@@ -143,18 +174,57 @@ surface point to texture space. Four classic choices compute it from the
 point's position. Here ${tex`y`} is "up", so the poles of the spherical
 map are at ${tex`y = \pm 1`}:
 
+The planar map simply drops ${tex`z`} and rescales ${tex`x`} and ${tex`y`} from
+${tex`[-1, 1]`} to ${tex`[0, 1]`}, an orthographic projection along ${tex`z`}:
+
 ```js echo
+const planarMap = (p) => [(p.x + 1) / 2, (p.y + 1) / 2];
+```
+
+The spherical map uses longitude and latitude. Longitude runs around the ${tex`y`}
+axis, and latitude comes from the angle down from the pole. Both are rescaled to
+${tex`[0, 1]`}:
+
+```js echo
+const longitude = (p) => (Math.PI + Math.atan2(p.z, p.x)) / (2 * Math.PI);
+const sphericalMap = (p) => [
+  longitude(p),
+  (Math.PI - Math.acos(p.y / Math.hypot(p.x, p.y, p.z))) / Math.PI
+];
+```
+
+The cylindrical map keeps that longitude, and ${tex`v`} simply follows the height:
+
+```js echo
+const cylindricalMap = (p) => [longitude(p), (1 + p.y) / 2];
+```
+
+The cube map picks the face whose axis has the largest absolute value, then divides the
+other two coordinates by it. It also returns which face it chose:
+
+```js echo
+function cubeMap(p) {
+  const ax = Math.abs(p.x), ay = Math.abs(p.y), az = Math.abs(p.z);
+  const uv = (a, b, m) => [0.5 * (1 + a / m), 0.5 * (1 + b / m)];
+  if (ax >= ay && ax >= az) return [...uv(p.z, p.y, ax), p.x > 0 ? 0 : 1];
+  if (ay >= az) return [...uv(p.x, p.z, ay), p.y > 0 ? 2 : 3];
+  return [...uv(p.x, p.y, az), p.z > 0 ? 4 : 5];
+}
+```
+
+We can check these on points whose answers we know. The north pole has ${tex`v = 1`} on
+the sphere, at any longitude. The point (0, 0, 1) is the center of cube face 4, so it
+should give ${tex`(0.5, 0.5)`} and then the face number:
+
+```js echo
+[sphericalMap({x: 0, y: 1, z: 0}), cubeMap({x: 0, y: 0, z: 1})]
+  .map((r) => r.join(", "))
+```
+
+```js
 const mappings = {
-  planar: (p) => [(p.x + 1) / 2, (p.y + 1) / 2],                      // orthographic projection along z
-  spherical: (p) => [(Math.PI + Math.atan2(p.z, p.x)) / (2 * Math.PI),
-                     (Math.PI - Math.acos(p.y / Math.hypot(p.x, p.y, p.z))) / Math.PI],
-  cylindrical: (p) => [(Math.PI + Math.atan2(p.z, p.x)) / (2 * Math.PI), (1 + p.y) / 2],
-  "cube map": (p) => {                                                  // pick the face, then divide
-    const ax = Math.abs(p.x), ay = Math.abs(p.y), az = Math.abs(p.z);
-    if (ax >= ay && ax >= az) return [0.5 * (1 + p.z / ax), 0.5 * (1 + p.y / ax), p.x > 0 ? 0 : 1];
-    if (ay >= az) return [0.5 * (1 + p.x / ay), 0.5 * (1 + p.z / ay), p.y > 0 ? 2 : 3];
-    return [0.5 * (1 + p.x / az), 0.5 * (1 + p.y / az), p.z > 0 ? 4 : 5];
-  }
+  planar: planarMap, spherical: sphericalMap,
+  cylindrical: cylindricalMap, "cube map": cubeMap
 };
 ```
 
@@ -164,7 +234,7 @@ and looks up the grid texture. (For the cube map, each face is tinted
 differently.) Try each mapping on a sphere, a tall "vase", and a flat
 "disk":
 
-```js echo
+```js
 const mapForm = view(Inputs.form({
   mapping: Inputs.radio(Object.keys(mappings), {value: "spherical", label: "φ"}),
   shape: Inputs.radio(["sphere", "tall", "flat"], {value: "sphere", label: "object"}),
@@ -173,7 +243,7 @@ const mapForm = view(Inputs.form({
 }));
 ```
 
-```js echo
+```js
 // Orthographic ray casting against the ellipsoid (x/a)² + (y/b)² + (z/a)² = 1.
 function castEllipsoid(size, {a, b, azimuth, elevation}, shadePoint) {
   const az = (azimuth * Math.PI) / 180, el = (elevation * Math.PI) / 180;
@@ -202,13 +272,19 @@ function castEllipsoid(size, {a, b, azimuth, elevation}, shadePoint) {
 const shapeSize = {sphere: [1, 1], tall: [0.55, 1.2], flat: [1.2, 0.5]};
 ```
 
-```js echo
+```js
 (() => {
   const [a, b] = shapeSize[mapForm.shape];
-  const faceTint = [[1, 0.6, 0.6], [0.6, 1, 0.6], [0.6, 0.6, 1], [1, 1, 0.5], [0.5, 1, 1], [1, 0.5, 1]];
+  const faceTint = [
+    [1, 0.6, 0.6], [0.6, 1, 0.6], [0.6, 0.6, 1], [1, 1, 0.5], [0.5, 1, 1],
+    [1, 0.5, 1]
+  ];
   return castEllipsoid(260, {a, b, azimuth: mapForm.azimuth, elevation: mapForm.elevation}, (p) => {
     // normalize the point into the [-1, 1] box the formulas assume
-    const q = {x: p.x / Math.max(a, b), y: p.y / Math.max(a, b), z: p.z / Math.max(a, b)};
+    const q = {
+      x: p.x / Math.max(a, b), y: p.y / Math.max(a, b),
+      z: p.z / Math.max(a, b)
+    };
     const [uu, vv, face] = mappings[mapForm.mapping](q);
     const c = textureLookup(gridTexture, uu, vv);
     return face === undefined ? c : c.map((x, k) => x * faceTint[face][k]);
@@ -237,10 +313,34 @@ instead and divide:
 
 ${tex.block`u = \frac{\sum_i \lambda_i\, u_i / w_i}{\sum_i \lambda_i / w_i}`}
 
-The small software rasterizer below draws a floor quad seen at an angle,
-once with plain screen-space interpolation and once perspective-correct:
+That formula fits in a small function. `lambda` holds the three screen-space weights,
+and `values` and `w` hold one number per corner. With `correct` off, it is an ordinary
+weighted average:
 
 ```js echo
+function interpolate(lambda, values, w, correct) {
+  const sum = (f) => d3.sum(lambda, (l, i) => l * f(i));
+  if (!correct) return sum((i) => values[i]);
+  return sum((i) => values[i] / w[i]) / sum((i) => 1 / w[i]);
+}
+```
+
+Halfway across the screen between a near corner (${tex`w = 1`}) and a far corner
+(${tex`w = 3`}), an affine lookup says ${tex`u = 0.5`}. Perspective-correct
+interpolation says the point is much closer to the near corner on the surface, at
+0.25:
+
+```js echo
+[
+  interpolate([0.5, 0.5], [0, 1], [1, 3], false),
+  interpolate([0.5, 0.5], [0, 1], [1, 3], true)
+]
+```
+
+The small software rasterizer below draws a floor quad seen at an angle, once in each
+mode, finding each pixel's weights exactly as in Module 09's barycentric coordinates:
+
+```js
 function rasterizeQuad(size, {perspectiveCorrect, tilt}) {
   const view = transforms.lookAt([0, 1.2 + tilt, -0.2], [0, 0, 3], [0, 1, 0]);
   const mvp = mat4.multiply(transforms.perspective(1.0, 1, 0.1, 20), view);
@@ -251,23 +351,17 @@ function rasterizeQuad(size, {perspectiveCorrect, tilt}) {
   });
   const buffer = new Uint8ClampedArray(size * size * 3).fill(245);
   for (const [i0, i1, i2] of [[0, 1, 2], [0, 2, 3]]) {
-    const [a, b, c] = [verts[i0], verts[i1], verts[i2]];
+    const tri = [verts[i0], verts[i1], verts[i2]], [a, b, c] = tri;
     const area = (b.sx - a.sx) * (c.sy - a.sy) - (c.sx - a.sx) * (b.sy - a.sy);
+    const w = tri.map((p) => p.w), us = tri.map((p) => p.u), vs = tri.map((p) => p.v);
     for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
       const px = x + 0.5, py = y + 0.5;
       const l0 = ((b.sx - px) * (c.sy - py) - (c.sx - px) * (b.sy - py)) / area;
       const l1 = ((c.sx - px) * (a.sy - py) - (a.sx - px) * (c.sy - py)) / area;
       const l2 = 1 - l0 - l1;
       if (l0 < 0 || l1 < 0 || l2 < 0) continue;
-      let u, v;
-      if (perspectiveCorrect) {
-        const iw = l0 / a.w + l1 / b.w + l2 / c.w;
-        u = (l0 * a.u / a.w + l1 * b.u / b.w + l2 * c.u / c.w) / iw;
-        v = (l0 * a.v / a.w + l1 * b.v / b.w + l2 * c.v / c.w) / iw;
-      } else {
-        u = l0 * a.u + l1 * b.u + l2 * c.u;
-        v = l0 * a.v + l1 * b.v + l2 * c.v;
-      }
+      const lambda = [l0, l1, l2];
+      const u = interpolate(lambda, us, w, perspectiveCorrect), v = interpolate(lambda, vs, w, perspectiveCorrect);
       buffer.set(textureLookup(gridTexture, u, v), 3 * (y * size + x));
     }
   }
@@ -275,11 +369,11 @@ function rasterizeQuad(size, {perspectiveCorrect, tilt}) {
 }
 ```
 
-```js echo
+```js
 const tilt = view(Inputs.range([0, 2], {value: 0.4, step: 0.05, label: "camera height above the floor"}));
 ```
 
-```js echo
+```js
 raster.sideBySide([
   ["screen-space (affine) interpolation", rasterizeQuad(220, {perspectiveCorrect: false, tilt})],
   ["perspective-correct interpolation", rasterizeQuad(220, {perspectiveCorrect: true, tilt})]
@@ -297,22 +391,44 @@ A **wrapping mode** decides what a lookup outside ${tex`[0,1]^2`}
 returns. The rule is applied to the **texel index**:
 
 ```js echo
+const positiveModulo = (i, n) => ((i % n) + n) % n;
 const wrapModes = {
-  repeat: (i, n) => ((i % n) + n) % n,
+  repeat: positiveModulo,
   "clamp-to-edge": (i, n) => Math.max(0, Math.min(n - 1, i)),
-  "mirror-repeat": (i, n) => { const m = ((i % (2 * n)) + 2 * n) % (2 * n); return m < n ? m : 2 * n - 1 - m; }
+  "mirror-repeat": (i, n) => {
+    const m = positiveModulo(i, 2 * n);
+    return m < n ? m : 2 * n - 1 - m;
+  }
 };
-const photo = (() => {
-  const img = raster.toImageData(raster.createTestImage(64, 48));
-  return makeTexture(64, 48, (i, j) => { const k = 4 * ((47 - j) * 64 + i); return [img.data[k], img.data[k + 1], img.data[k + 2]]; });
-})();
+```
+
+Check them on a 4-texel row. Index 5 is one past the end of the second copy. Repeat
+wraps it to 1, clamp stops at the last texel, 3, and mirror reflects it back to 2:
+
+```js echo
+Object.values(wrapModes).map((wrap) => wrap(5, 4))
+```
+
+A lookup applies the rule to both indices. Unlike `textureLookup`, it must not clamp
+first:
+
+```js echo
 function lookupWrapped(t, u, v, mode) {
-  const i = wrapModes[mode](Math.floor(u * t.width), t.width), j = wrapModes[mode](Math.floor(v * t.height), t.height);
+  const wrap = wrapModes[mode];
+  const i = wrap(Math.floor(u * t.width), t.width);
+  const j = wrap(Math.floor(v * t.height), t.height);
   return texel(t, i, j);
 }
 ```
 
-```js echo
+```js
+const photo = (() => {
+  const img = raster.toImageData(raster.createTestImage(64, 48));
+  return makeTexture(64, 48, (i, j) => { const k = 4 * ((47 - j) * 64 + i); return [img.data[k], img.data[k + 1], img.data[k + 2]]; });
+})();
+```
+
+```js
 raster.sideBySide(Object.keys(wrapModes).map((mode) => [mode,
   imageCanvas(192, 144, (x, y) => {
     const u = -1 + 3 * (x + 0.5) / 192, v = -1 + 3 * (1 - (y + 0.5) / 144);   // u, v in [-1, 2]
@@ -345,26 +461,36 @@ const uvVertexLayout = {
     {shaderLocation: 2, offset: 6 * 4, format: "float32x2"}
   ]
 };
-const checkerModule = device.createShaderModule({code: `
+```
+
+Each vertex now has a third attribute, the texture coordinate. The shader needs no
+texture at all. It computes a checkerboard directly from the interpolated
+${tex`(u,v)`}, by counting which cell the point falls in and checking whether that
+count is odd:
+
+```js echo
+const wgslChecker = `
+fn checkerParity(uv: vec2<f32>, density: f32) -> f32 {
+  let cell = floor(uv.x * density * 2.0) + floor(uv.y * density);
+  return cell - 2.0 * floor(cell / 2.0);
+}`;
+```
+
+```js
+const checkerModule = device.createShaderModule({code: `${wgslChecker}
 struct Uniforms { mvp: mat4x4<f32>, params: vec4<f32> };
 @group(0) @binding(0) var<uniform> u: Uniforms;
-
-struct VertexOut { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32> };
-
+struct VertexOut {
+  @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>,
+  @location(1) uv: vec2<f32>
+};
 @vertex
 fn vs_main(@location(0) inPos: vec3<f32>, @location(1) inNormal: vec3<f32>, @location(2) inUV: vec2<f32>) -> VertexOut {
-  var out: VertexOut;
-  out.position = u.mvp * vec4<f32>(inPos, 1.0);
-  out.normal = inNormal;
-  out.uv = inUV;
-  return out;
+  return VertexOut(u.mvp * vec4<f32>(inPos, 1.0), inNormal, inUV);
 }
-
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-  let cell = floor(in.uv.x * u.params.x * 2.0) + floor(in.uv.y * u.params.x);
-  let parity = cell - 2.0 * floor(cell / 2.0);
-  let base = mix(vec3<f32>(0.9, 0.75, 0.3), vec3<f32>(0.15, 0.25, 0.5), parity);
+  let base = mix(vec3<f32>(0.9, 0.75, 0.3), vec3<f32>(0.15, 0.25, 0.5), checkerParity(in.uv, u.params.x));
   let ndotl = max(dot(normalize(in.normal), normalize(vec3<f32>(0.4, 0.8, 0.5))), 0.0);
   return vec4<f32>(base * (0.35 + 0.65 * ndotl), 1.0);
 }`});
@@ -375,17 +501,41 @@ const checkerPipeline = device.createRenderPipeline({
   primitive: {topology: "triangle-list", cullMode: "back"},
   depthStencil: {format: "depth24plus", depthWriteEnabled: true, depthCompare: "less"}
 });
-const uvSphere = geometry.createSphere(24, 32);   // createSphere duplicates the seam column (lon = 0 and lon = 32)
-const uvSphereVB = createBuffer(device, geometry.interleave(uvSphere.positions, uvSphere.normals, uvSphere.uvs), GPUBufferUsage.VERTEX);
-const uvSphereIB = createBuffer(device, uvSphere.indices, GPUBufferUsage.INDEX);
-// The same triangles, but the last column reuses the first column's vertices (u = 0) instead of the duplicates (u = 1).
-const sharedSeamIB = createBuffer(device, uvSphere.indices.map((i) => (i % 33 === 32 ? i - 32 : i)), GPUBufferUsage.INDEX);
+```
+
+`createSphere` duplicates the vertices along the seam, one copy at ${tex`u = 0`} and
+one at ${tex`u = 1`}, by listing longitude columns 0 through 32. Each row therefore has 33
+vertices, and index `i` is in the last column when `i % 33 === 32`:
+
+```js echo
+const uvSphere = geometry.createSphere(24, 32);
+const uvSphereVB = createBuffer(
+  device,
+  geometry.interleave(uvSphere.positions, uvSphere.normals, uvSphere.uvs),
+  GPUBufferUsage.VERTEX
+);
+const uvSphereIB =
+  createBuffer(device, uvSphere.indices, GPUBufferUsage.INDEX);
+```
+
+To see why the duplicates matter, a second index buffer redirects the last column to the
+first column's vertices. It has the same triangles, with ${tex`u = 0`} where
+${tex`u = 1`} should be:
+
+```js echo
+const sharedSeamIndices =
+  uvSphere.indices.map((i) => (i % 33 === 32 ? i - 32 : i));
+const sharedSeamIB =
+  createBuffer(device, sharedSeamIndices, GPUBufferUsage.INDEX);
+```
+
+```js
 const checkerUniforms = device.createBuffer({size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
 const checkerBindGroup = device.createBindGroup({layout: checkerPipeline.getBindGroupLayout(0), entries: [{binding: 0, resource: {buffer: checkerUniforms}}]});
 const checkerTarget = await makeCanvas(300);
 ```
 
-```js echo
+```js
 const seamForm = view(Inputs.form({
   duplicated: Inputs.toggle({value: true, label: "duplicate seam vertices"}),
   density: Inputs.range([2, 16], {value: 8, step: 1, label: "checker density"}),
@@ -394,21 +544,31 @@ const seamForm = view(Inputs.form({
 }));
 ```
 
+The toggle chooses which index buffer the draw uses, and nothing else changes:
+
 ```js echo
-{
-  const mvp = mat4.multiply(transforms.perspective(0.73, 1, 0.1, 20), transforms.lookAt(orbitEye(seamForm.azimuth, seamForm.elevation, 3.2), [0, 0, 0], [0, 1, 0]));
-  device.queue.writeBuffer(checkerUniforms, 0, new Float32Array([...mvp, seamForm.density, 0, 0, 0]));
-  renderPass(checkerTarget, (pass) => {
-    pass.setPipeline(checkerPipeline);
-    pass.setBindGroup(0, checkerBindGroup);
-    pass.setVertexBuffer(0, uvSphereVB);
-    pass.setIndexBuffer(seamForm.duplicated ? uvSphereIB : sharedSeamIB, "uint16");
-    pass.drawIndexed(uvSphere.indices.length);
-  });
+function drawUVSphere(pass) {
+  pass.setPipeline(checkerPipeline);
+  pass.setBindGroup(0, checkerBindGroup);
+  pass.setVertexBuffer(0, uvSphereVB);
+  const indexBuffer = seamForm.duplicated ? uvSphereIB : sharedSeamIB;
+  pass.setIndexBuffer(indexBuffer, "uint16");
+  pass.drawIndexed(uvSphere.indices.length);
 }
 ```
 
-```js echo
+```js
+{
+  const mvp = mat4.multiply(
+    transforms.perspective(0.73, 1, 0.1, 20),
+    transforms.lookAt(orbitEye(seamForm.azimuth, seamForm.elevation, 3.2), [0, 0, 0], [0, 1, 0])
+  );
+  device.queue.writeBuffer(checkerUniforms, 0, new Float32Array([...mvp, seamForm.density, 0, 0, 0]));
+  renderPass(checkerTarget, drawUVSphere);
+}
+```
+
+```js
 checkerTarget.canvas
 ```
 
@@ -430,22 +590,55 @@ When magnifying, blend the **four nearest texels** with weights given by
 the distances to their centers. This is the reading's
 `tex_sample_bilinear`, with clamping at the edges:
 
-```js echo
-function sampleBilinear(t, u, v) {
-  const up = u * t.width - 0.5, vp = v * t.height - 0.5;
-  const iu0 = Math.floor(up), iv0 = Math.floor(vp), iu1 = iu0 + 1, iv1 = iv0 + 1;
-  const au = iu1 - up, bu = 1 - au, av = iv1 - vp, bv = 1 - av;
-  const T = (i, j) => texel(t, Math.max(0, Math.min(t.width - 1, i)), Math.max(0, Math.min(t.height - 1, j)));
-  const out = [0, 0, 0];
-  for (let k = 0; k < 3; k++) {
-    out[k] = au * av * T(iu0, iv0)[k] + au * bv * T(iu0, iv1)[k] + bu * av * T(iu1, iv0)[k] + bu * bv * T(iu1, iv1)[k];
-  }
-  return out;
-}
-const tiny = makeTexture(8, 8, (i, j) => d3.rgb(d3.interpolateViridis(((i * 3 + j * 5) % 8) / 7)).toString().match(/\d+/g).map(Number));
-```
+First, find the texel coordinates. `up` is the position measured in texels, shifted so
+that a texel center is at a whole number. The two neighbors are the integers around it,
+and the weights say how close each one is:
 
 ```js echo
+function bilinearWeights(position) {
+  const i0 = Math.floor(position);
+  const a = i0 + 1 - position;   // weight of i0
+  return {i0, i1: i0 + 1, a, b: 1 - a};
+}
+```
+
+A point exactly halfway between two texel centers should weigh them equally:
+
+```js echo
+bilinearWeights(2.5)
+```
+
+The sample blends all four combinations, per channel:
+
+```js echo
+function sampleBilinear(t, u, v) {
+  const U = bilinearWeights(u * t.width - 0.5);
+  const V = bilinearWeights(v * t.height - 0.5);
+  const T = (i, j) =>
+    texel(t, clampIndex(i, t.width), clampIndex(j, t.height));
+  return [0, 1, 2].map((k) =>
+    U.a * V.a * T(U.i0, V.i0)[k] + U.a * V.b * T(U.i0, V.i1)[k]
+    + U.b * V.a * T(U.i1, V.i0)[k] + U.b * V.b * T(U.i1, V.i1)[k]);
+}
+```
+
+At the very center of a 2 × 2 texture, it should average all four texels. With red values
+0, 1, 2, and 3, that is 1.5:
+
+```js echo
+sampleBilinear(makeTexture(2, 2, (i, j) => [j * 2 + i, 0, 0]), 0.5, 0.5)
+```
+
+```js
+const tiny = makeTexture(
+  8, 8,
+  (i, j) => d3.rgb(
+    d3.interpolateViridis(((i * 3 + j * 5) % 8) / 7)
+  ).toString().match(/\d+/g).map(Number)
+);
+```
+
+```js
 raster.sideBySide([
   ["8 × 8 texture, nearest", imageCanvas(200, 200, (x, y) => textureLookup(tiny, (x + 0.5) / 200, 1 - (y + 0.5) / 200))],
   ["8 × 8 texture, bilinear", imageCanvas(200, 200, (x, y) => sampleBilinear(tiny, (x + 0.5) / 200, 1 - (y + 0.5) / 200))]
@@ -466,11 +659,28 @@ footprint. A mipmap level is then chosen by
 
 ${tex.block`D = \max\{\lVert\mathbf u_x\rVert, \lVert\mathbf u_y\rVert\}\ \text{(in texels)}, \qquad k = \log_2 D`}
 
-For a floor plane seen from a camera, we can compute ${tex`(u,v)`} at
-every pixel by ray casting, then take finite differences between
-neighboring pixels to get ${tex`J`}:
+Given the texture coordinates, in texels, at a pixel and its two neighbors, the rest is
+a few lines. The finite differences are the columns of ${tex`J`}:
 
 ```js echo
+function mipLevel(at, right, down) {
+  const ux = Math.hypot(right[0] - at[0], right[1] - at[1]);
+  const uy = Math.hypot(down[0] - at[0], down[1] - at[1]);
+  return Math.log2(Math.max(ux, uy));
+}
+```
+
+If one pixel step moves 8 texels in one direction and 2 in the other, the footprint's
+longer side is 8 texels, so ${tex`k = \log_2 8 = 3`}:
+
+```js echo
+mipLevel([0, 0], [8, 0], [0, 2])
+```
+
+For a floor plane seen from a camera, we can compute ${tex`(u,v)`} at every pixel by ray
+casting, which gives those three inputs everywhere in the image:
+
+```js
 const footprintForm = view(Inputs.form({
   height: Inputs.range([0.3, 3], {value: 1.1, step: 0.05, label: "camera height"}),
   texSize: Inputs.select([64, 256, 1024], {value: 256, label: "texture size (texels)"}),
@@ -478,7 +688,7 @@ const footprintForm = view(Inputs.form({
 }));
 ```
 
-```js echo
+```js
 const footprint = (() => {
   const size = 180, eye = [0, footprintForm.height, -2.4];
   const target = [0, 0, 9];
@@ -498,18 +708,20 @@ const footprint = (() => {
     const p = uvAt(px + 0.5, py + 0.5), px1 = uvAt(px + 1.5, py + 0.5), py1 = uvAt(px + 0.5, py + 1.5);
     if (!p || !px1 || !py1) continue;
     const ux = Math.hypot(px1[0] - p[0], px1[1] - p[1]), uy = Math.hypot(py1[0] - p[0], py1[1] - p[1]);
-    k[py * size + px] = Math.log2(Math.max(ux, uy));
+    k[py * size + px] = mipLevel(p, px1, py1);
     aniso[py * size + px] = Math.max(ux, uy) / Math.min(ux, uy);
   }
   return {size, k, aniso};
 })();
 ```
 
-```js echo
+```js
 (() => {
   const {size, k, aniso} = footprint;
   const showK = footprintForm.show === "mip level k";
-  const color = showK ? d3.scaleSequential(d3.interpolateTurbo).domain([-2, 8]) : d3.scaleSequential(d3.interpolateMagma).domain([1, 12]);
+  const color = showK ? d3.scaleSequential(
+    d3.interpolateTurbo
+  ).domain([-2, 8]) : d3.scaleSequential(d3.interpolateMagma).domain([1, 12]);
   const canvas = imageCanvas(size, size, (x, y) => {
     const val = (showK ? k : aniso)[y * size + x];
     if (Number.isNaN(val)) return [235, 240, 248];
@@ -518,7 +730,11 @@ const footprint = (() => {
   }, 1.6);
   const finite = Array.from(showK ? k : aniso).filter(Number.isFinite);
   return html`<div style="display:flex; gap:16px; align-items:flex-start">${canvas}<div style="font:13px var(--sans-serif)">
-    ${Plot.legend({color: {type: "sequential", scheme: showK ? "turbo" : "magma", domain: showK ? [-2, 8] : [1, 12], label: footprintForm.show}})}
+    ${
+      Plot.legend(
+        {color: {type: "sequential", scheme: showK ? "turbo" : "magma", domain: showK ? [-2, 8] : [1, 12], label: footprintForm.show}}
+      )
+    }
     <p>range on screen: ${d3.min(finite).toFixed(2)} to ${d3.max(finite).toFixed(2)}</p></div></div>`;
 })()
 ```
@@ -536,20 +752,38 @@ A **mipmap** stores the texture at a series of lower resolutions. Each
 level averages ${tex`2\times2`} texels of the level below:
 
 ```js echo
+function averageBlock(p, i, j) {
+  const j1 = Math.min(p.height - 1, 2 * j + 1), i0 = 2 * i, j0 = 2 * j;
+  const corners = [[i0, j0], [i0 + 1, j0], [i0, j1], [i0 + 1, j1]];
+  return [0, 1, 2].map((c) =>
+    d3.mean(corners, ([a, b]) => texel(p, a, b)[c]));
+}
+```
+
+Each new level halves the size and averages the blocks of the one before, until a single
+texel remains:
+
+```js echo
 function buildMipmap(t) {
   const levels = [t];
   while (levels.at(-1).width > 1) {
-    const p = levels.at(-1), w = p.width >> 1, h = Math.max(1, p.height >> 1);
-    levels.push(makeTexture(w, h, (i, j) => [0, 1, 2].map((c) =>
-      (texel(p, 2 * i, 2 * j)[c] + texel(p, 2 * i + 1, 2 * j)[c] + texel(p, 2 * i, Math.min(p.height - 1, 2 * j + 1))[c] + texel(p, 2 * i + 1, Math.min(p.height - 1, 2 * j + 1))[c]) / 4)));
+    const p = levels.at(-1);
+    const w = p.width >> 1, h = Math.max(1, p.height >> 1);
+    levels.push(makeTexture(w, h, (i, j) => averageBlock(p, i, j)));
   }
   return levels;
 }
-const checker = makeTexture(64, 64, (i, j) => (((i >> 2) + (j >> 2)) % 2 ? [40, 50, 90] : [240, 220, 160]));
+```
+
+Here it is on a checker with squares 4 texels wide:
+
+```js echo
+const checker = makeTexture(64, 64, (i, j) =>
+  (((i >> 2) + (j >> 2)) % 2 ? [40, 50, 90] : [240, 220, 160]));
 const checkerMips = buildMipmap(checker);
 ```
 
-```js echo
+```js
 raster.sideBySide(checkerMips.map((lv, k) => [`level ${k}: ${lv.width}×${lv.height}`,
   imageCanvas(lv.width, lv.height, (x, y) => texel(lv, x, lv.height - 1 - y), Math.max(1, 64 / lv.width) * (k === 0 ? 1.5 : 1))]))
 ```
@@ -567,11 +801,21 @@ part of ${tex`k`}:
 
 ```js echo
 function sampleTrilinear(mips, u, v, D) {
-  const k = Math.max(0, Math.min(mips.length - 1, Math.log2(Math.max(D, 1e-6))));
-  const k0 = Math.floor(k), k1 = Math.min(mips.length - 1, k0 + 1), f = k - k0;
-  const c0 = sampleBilinear(mips[k0], u, v), c1 = sampleBilinear(mips[k1], u, v);
+  const last = mips.length - 1;
+  const k = Math.max(0, Math.min(last, Math.log2(Math.max(D, 1e-6))));
+  const k0 = Math.floor(k), k1 = Math.min(last, k0 + 1), f = k - k0;
+  const c0 = sampleBilinear(mips[k0], u, v);
+  const c1 = sampleBilinear(mips[k1], u, v);
   return c0.map((c, i) => (1 - f) * c + f * c1[i]);
 }
+```
+
+With a footprint of 64 texels or more, the sample comes entirely from the last level, the
+average of the whole checker. The two colors cover equal areas, so its red should be
+${tex`(40 + 240)/2 = 140`}:
+
+```js echo
+sampleTrilinear(checkerMips, 0.3, 0.7, 64)
 ```
 
 The WebGPU section below runs the same comparison on the GPU: point
@@ -589,7 +833,7 @@ single-channel maps are commonly **packed** into the channels of one
 image. glTF's **ORM** texture stores occlusion in red, roughness in green,
 and metallic in blue:
 
-```js echo
+```js
 const ormData = new ImageData(64, 64);
 for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
   const i = (y * 64 + x) * 4, u = x / 64, v = y / 64;
@@ -601,7 +845,7 @@ for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
 const isolateChannel = (imageData, channel) => raster.mapPixels(imageData, (r, g, b) => { const c = [r, g, b][channel]; return [c, c, c, 255]; });
 ```
 
-```js echo
+```js
 raster.sideBySide([
   ["packed ORM", raster.renderImageData(ormData, {scale: 3})],
   ["R: occlusion", raster.renderImageData(isolateChannel(ormData, 0), {scale: 3})],
@@ -621,27 +865,57 @@ the normal of the bumpy surface comes from the height's **derivatives**:
 
 ${tex.block`\mathbf n_{\text{tangent}} \propto \left(-\frac{\partial h}{\partial u},\ -\frac{\partial h}{\partial v},\ 1\right), \qquad \text{color} = \tfrac12(\mathbf n + 1)`}
 
-```js echo
+```js
 const bumpForm = view(Inputs.form({
   pattern: Inputs.radio(["planks", "rivets", "noise"], {value: "rivets", label: "height field"}),
   strength: Inputs.range([0.5, 8], {value: 3, step: 0.5, label: "bump strength"})
 }));
 ```
 
+The normal comes from central differences of the height. The factor `0.05` only scales
+these heights to a pleasant slope:
+
 ```js echo
-const bumpHeight = {
-  planks: (u, v) => { const l = (v * 6) % 1; return Math.max(0, 0.4 - Math.min(l, 1 - l) * 4); },
-  rivets: (u, v) => { const du = (u * 4) % 1 - 0.5, dv = (v * 4) % 1 - 0.5; return Math.max(0, 0.18 - (du * du + dv * dv)); },
-  noise: (u, v) => 0.2 * perlinNoise(u * 6, v * 6, 0.5)
-}[bumpForm.pattern];
 function normalFromHeight(h, u, v, strength, e = 1 / 256) {
-  const dhdu = (h(u + e, v) - h(u - e, v)) / (2 * e), dhdv = (h(u, v + e) - h(u, v - e)) / (2 * e);
-  const n = [-strength * dhdu * 0.05, -strength * dhdv * 0.05, 1], l = Math.hypot(...n);
+  const dhdu = (h(u + e, v) - h(u - e, v)) / (2 * e);
+  const dhdv = (h(u, v + e) - h(u, v - e)) / (2 * e);
+  const n = [-strength * dhdu * 0.05, -strength * dhdv * 0.05, 1];
+  const l = Math.hypot(...n);
   return n.map((c) => c / l);
 }
 ```
 
+On flat ground, every difference is 0, so the normal should be straight up in tangent
+space, (0, 0, 1):
+
 ```js echo
+normalFromHeight(() => 0.5, 0.3, 0.3, 3)
+```
+
+A rising slope should tilt the normal back against the slope, giving a negative
+${tex`x`}:
+
+```js echo
+normalFromHeight((u, v) => u, 0.3, 0.3, 3)
+```
+
+The patterns below are three height fields, each just a function of ${tex`(u, v)`}:
+
+```js
+const bumpHeight = {
+  planks: (u, v) => {
+    const l = (v * 6) % 1;
+    return Math.max(0, 0.4 - Math.min(l, 1 - l) * 4);
+  },
+  rivets: (u, v) => {
+    const du = (u * 4) % 1 - 0.5, dv = (v * 4) % 1 - 0.5;
+    return Math.max(0, 0.18 - (du * du + dv * dv));
+  },
+  noise: (u, v) => 0.2 * perlinNoise(u * 6, v * 6, 0.5)
+}[bumpForm.pattern];
+```
+
+```js
 raster.sideBySide([
   ["height h(u, v)", imageCanvas(128, 128, (x, y) => { const g = 255 * Math.min(1, bumpHeight(x / 128, 1 - y / 128) * 3); return [g, g, g]; }, 1.5)],
   ["tangent-space normal map", imageCanvas(128, 128, (x, y) => normalFromHeight(bumpHeight, x / 128, 1 - y / 128, bumpForm.strength).map((c) => 255 * (c * 0.5 + 0.5)), 1.5)],
@@ -684,7 +958,8 @@ coordinates and looked up.
 function traceRay(ray, scene) {
   const hit = scene.intersect(ray);
   if (hit) return hit.shade(ray);
-  return textureLookup(scene.envMap, directionToUV(ray.direction));   // miss: show the environment
+  // miss: show the environment
+  return textureLookup(scene.envMap, directionToUV(ray.direction));
 }
 ```
 
@@ -711,15 +986,30 @@ mapping, no distortion, and no seam. The simplest examples are stripes:
 
 ```js echo
 const c0 = [37, 99, 170], c1 = [245, 225, 180];
+```
+
+The sign of ${tex`\sin x`} alternates, which gives hard stripes. Dividing by a width
+${tex`w`} makes each stripe ${tex`w`} wide. Replacing the sign test with a blend, by a
+factor ${tex`t`} that swings between 0 and 1, softens the edges:
+
+```js echo
 const stripes = {
   "sin(x) > 0": (p, w) => (Math.sin(p.x) > 0 ? c0 : c1),
   "width w": (p, w) => (Math.sin(Math.PI * p.x / w) > 0 ? c0 : c1),
-  "smooth": (p, w) => { const t = (1 + Math.sin(Math.PI * p.x / w)) / 2; return c0.map((c, k) => (1 - t) * c + t * c1[k]); }
+  "smooth": (p, w) => {
+    const t = (1 + Math.sin(Math.PI * p.x / w)) / 2;
+    return c0.map((c, k) => (1 - t) * c + t * c1[k]);
+  }
 };
-const stripeWidth = view(Inputs.range([0.1, 2], {value: 0.5, step: 0.05, label: "stripe width w"}));
 ```
 
-```js echo
+```js
+const stripeWidth = view(
+  Inputs.range([0.1, 2], {value: 0.5, step: 0.05, label: "stripe width w"})
+);
+```
+
+```js
 raster.sideBySide(Object.entries(stripes).map(([name, f]) => [name, imageCanvas(150, 90, (x) => f({x: x / 150 * 6, y: 0, z: 0}, stripeWidth))]))
 ```
 
@@ -742,35 +1032,55 @@ const perlinTables = (() => {
   const P = d3.shuffle(d3.range(256), rand);
   const G = [];
   while (G.length < 256) {
-    const v = [2 * rand() - 1, 2 * rand() - 1, 2 * rand() - 1], l2 = v[0] ** 2 + v[1] ** 2 + v[2] ** 2;
-    if (l2 > 0 && l2 < 1) G.push(v.map((c) => c / Math.sqrt(l2)));     // keep points inside the sphere only
+    const v = [2 * rand() - 1, 2 * rand() - 1, 2 * rand() - 1];
+    const l2 = v[0] ** 2 + v[1] ** 2 + v[2] ** 2;
+    if (l2 > 0 && l2 < 1) G.push(v.map((c) => c / Math.sqrt(l2)));
   }
   return {P, G};
 })();
+```
+
+Nesting the permutation hashes a lattice point to a table index. `omega` is the smooth
+weight from the formula. It equals 1 at the point itself and fades to 0 at distance 1:
+
+```js echo
 const phiIndex = (i) => perlinTables.P[((i % 256) + 256) % 256];
-const omega = (t) => (Math.abs(t) < 1 ? 2 * Math.abs(t) ** 3 - 3 * t * t + 1 : 0);
+const gradientAt = (i, j, k) =>
+  perlinTables.G[phiIndex(i + phiIndex(j + phiIndex(k)))];
+const omega = (t) =>
+  Math.abs(t) < 1 ? 2 * Math.abs(t) ** 3 - 3 * t * t + 1 : 0;
+```
 
+The noise visits the eight corners of the point's lattice cell and adds up the terms:
+
+```js echo
 function perlinNoise(x, y, z) {
-  let n = 0;
-  for (let i = Math.floor(x); i <= Math.floor(x) + 1; i++)
-    for (let j = Math.floor(y); j <= Math.floor(y) + 1; j++)
-      for (let k = Math.floor(z); k <= Math.floor(z) + 1; k++) {
-        const g = perlinTables.G[phiIndex(i + phiIndex(j + phiIndex(k)))];
-        const u = x - i, v = y - j, w = z - k;
-        n += omega(u) * omega(v) * omega(w) * (g[0] * u + g[1] * v + g[2] * w);
-      }
-  return n;
-}
-
-// Turbulence: |n| summed over octaves, each half the size and half the weight.
-function turbulence(x, y, z, octaves = 6) {
-  let t = 0;
-  for (let i = 0; i < octaves; i++) t += Math.abs(perlinNoise(2 ** i * x, 2 ** i * y, 2 ** i * z)) / 2 ** i;
-  return t;
+  const fx = Math.floor(x), fy = Math.floor(y), fz = Math.floor(z);
+  return d3.sum([0, 1], (a) => d3.sum([0, 1], (b) => d3.sum([0, 1], (c) => {
+    const g = gradientAt(fx + a, fy + b, fz + c);
+    const u = x - fx - a, v = y - fy - b, w = z - fz - c;
+    return omega(u) * omega(v) * omega(w) * (g[0] * u + g[1] * v + g[2] * w);
+  })));
 }
 ```
 
+At a lattice point, the offset to that corner is zero and the other corners have zero
+weight, so the noise should be exactly 0 there, while a nearby point should not be:
+
 ```js echo
+[perlinNoise(3, 5, 2), perlinNoise(3.5, 5.5, 2.5)]
+```
+
+**Turbulence** sums ${tex`|n|`} over octaves, each half the size and half the weight:
+
+```js echo
+function turbulence(x, y, z, octaves = 6) {
+  return d3.sum(d3.range(octaves), (i) =>
+    Math.abs(perlinNoise(2 ** i * x, 2 ** i * y, 2 ** i * z)) / 2 ** i);
+}
+```
+
+```js
 const noiseForm = view(Inputs.form({
   scale: Inputs.range([1, 12], {value: 4, step: 0.5, label: "frequency"}),
   octaves: Inputs.range([1, 8], {value: 6, step: 1, label: "turbulence octaves"}),
@@ -778,7 +1088,7 @@ const noiseForm = view(Inputs.form({
 }));
 ```
 
-```js echo
+```js
 (() => {
   const s = noiseForm.scale, N = 140;
   const at = (x, y) => [x / N * s, (1 - y / N) * s];
@@ -799,18 +1109,22 @@ Because the function is defined in 3D, the same marble can be **carved**
 into any object. The sphere renderer from the start of the page samples
 the solid texture at each hit point, with no texture coordinates at all:
 
-```js echo
+```js
 const solidForm = view(Inputs.form({
   shape: Inputs.radio(["sphere", "tall", "flat"], {value: "tall", label: "object"}),
   azimuth: Inputs.range([-180, 180], {value: 20, step: 1, label: "view azimuth"})
 }));
 ```
 
-```js echo
+```js
 (() => {
   const [a, b] = shapeSize[solidForm.shape];
   return castEllipsoid(240, {a, b, azimuth: solidForm.azimuth, elevation: 15}, (p) => {
-    const t = (1 + Math.sin(3 * p.z * noiseForm.scale / 2 + noiseForm.k2 * turbulence(p.x * 2, p.y * 2, p.z * 2, 5))) / 2;
+    const t = (
+      1 + Math.sin(
+        3 * p.z * noiseForm.scale / 2 + noiseForm.k2 * turbulence(p.x * 2, p.y * 2, p.z * 2, 5)
+      )
+    ) / 2;
     return [245 - 140 * t, 238 - 150 * t, 230 - 150 * t];
   });
 })()
@@ -836,7 +1150,7 @@ uploaded. To learn how to draw your own, including bricks, wood, noise,
 seamless tiling, and texture arrays, see the
 [Making Textures with Canvas 2D](/tutorial-canvas2d-textures) tutorial.
 
-```js echo
+```js
 function makeCheckerCanvas(size, cells) {
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = size;
@@ -878,29 +1192,39 @@ module:
 The same floor (repeating the checker 6 × 16 times) is drawn with four
 samplers, plus the level-colored texture:
 
+Two triangles form the floor quad. Each vertex is a position and a texture coordinate,
+five floats. The coordinates run up to 6 and 16, far outside ${tex`[0,1]`}, which is what
+makes the wrap mode matter:
+
 ```js echo
 const floorVB = createBuffer(device, new Float32Array([
   -4, 0, 0.5, 0, 0,   4, 0, 0.5, 6, 0,   4, 0, 14, 6, 16,
   -4, 0, 0.5, 0, 0,   4, 0, 14, 6, 16,  -4, 0, 14, 0, 16
 ]), GPUBufferUsage.VERTEX);
-const floorModule = device.createShaderModule({code: `
-@group(0) @binding(0) var<uniform> mvp: mat4x4<f32>;
+```
+
+The fragment shader is the smallest possible textured shader. The texture and the sampler
+are separate bindings, and `textureSample` combines them. The GPU estimates the footprint
+from the screen-space derivatives of `uv`, so all of the filtering above happens inside
+this one call:
+
+```js echo
+const wgslFloorFragment = `
 @group(0) @binding(1) var tex: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
-
-struct VertexOut { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> };
-
-@vertex
-fn vs_main(@location(0) inPos: vec3<f32>, @location(1) inUV: vec2<f32>) -> VertexOut {
-  var out: VertexOut;
-  out.position = mvp * vec4<f32>(inPos, 1.0);
-  out.uv = inUV;
-  return out;
-}
-
 @fragment
 fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-  return textureSample(tex, samp, uv);   // the GPU estimates the footprint from screen-space derivatives of uv
+  return textureSample(tex, samp, uv);
+}`;
+```
+
+```js
+const floorModule = device.createShaderModule({code: `${wgslFloorFragment}
+@group(0) @binding(0) var<uniform> mvp: mat4x4<f32>;
+struct VertexOut { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> };
+@vertex
+fn vs_main(@location(0) inPos: vec3<f32>, @location(1) inUV: vec2<f32>) -> VertexOut {
+  return VertexOut(mvp * vec4<f32>(inPos, 1.0), inUV);
 }`});
 const floorPipeline = device.createRenderPipeline({
   layout: "auto",
@@ -911,14 +1235,40 @@ const floorPipeline = device.createRenderPipeline({
   depthStencil: {format: "depth24plus", depthWriteEnabled: true, depthCompare: "less"}
 });
 const floorMVPBuffer = device.createBuffer({size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
+```
+
+Everything that varies between the demos lives in the **sampler**. So comparing the filters
+needs no change to the shader or the pipeline, only these settings. Clamping `lodMaxClamp`
+to 0 forbids every mip level but the first:
+
+```js echo
 const repeat = {addressModeU: "repeat", addressModeV: "repeat"};
+const nearestNoMips = {
+  magFilter: "nearest", minFilter: "nearest", mipmapFilter: "nearest",
+  lodMaxClamp: 0, ...repeat
+};
+const bilinearNoMips = {
+  magFilter: "linear", minFilter: "linear", lodMaxClamp: 0, ...repeat
+};
+```
+
+Trilinear adds linear blending between levels, and anisotropic adds one more setting:
+
+```js echo
+const trilinear = {
+  magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", ...repeat
+};
+const anisotropic = {...trilinear, maxAnisotropy: 16};
+```
+
+```js
 const floorVariants = await Promise.all([
-  ["point sampling, level 0 only", floorTexture, {magFilter: "nearest", minFilter: "nearest", mipmapFilter: "nearest", lodMaxClamp: 0, ...repeat}],
-  ["bilinear, no mipmaps", floorTexture, {magFilter: "linear", minFilter: "linear", lodMaxClamp: 0, ...repeat}],
-  ["trilinear", floorTexture, {magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", ...repeat}],
-  ["trilinear + anisotropic (16×)", floorTexture, {magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", maxAnisotropy: 16, ...repeat}],
-  ["which level? (trilinear)", levelTexture, {magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", ...repeat}],
-  ["which level? (anisotropic)", levelTexture, {magFilter: "linear", minFilter: "linear", mipmapFilter: "linear", maxAnisotropy: 16, ...repeat}]
+  ["point sampling, level 0 only", floorTexture, nearestNoMips],
+  ["bilinear, no mipmaps", floorTexture, bilinearNoMips],
+  ["trilinear", floorTexture, trilinear],
+  ["trilinear + anisotropic (16×)", floorTexture, anisotropic],
+  ["which level? (trilinear)", levelTexture, trilinear],
+  ["which level? (anisotropic)", levelTexture, anisotropic]
 ].map(async ([label, texture, samplerDesc]) => ({
   label, target: await makeCanvas(240),
   bindGroup: device.createBindGroup({layout: floorPipeline.getBindGroupLayout(0), entries: [
@@ -927,20 +1277,34 @@ const floorVariants = await Promise.all([
 })));
 ```
 
-```js echo
+```js
 const floorHeight = view(Inputs.range([0.2, 3], {value: 1.1, step: 0.05, label: "camera height"}));
 ```
 
-```js echo
+```js
 {
-  device.queue.writeBuffer(floorMVPBuffer, 0, mat4.multiply(transforms.perspective(0.87, 1, 0.1, 30), transforms.lookAt([0, floorHeight, -2.4], [0, 0, 9], [0, 1, 0])));
+  device.queue.writeBuffer(
+    floorMVPBuffer, 0,
+    mat4.multiply(
+      transforms.perspective(0.87, 1, 0.1, 30),
+      transforms.lookAt([0, floorHeight, -2.4], [0, 0, 9], [0, 1, 0])
+    )
+  );
   for (const {target, bindGroup} of floorVariants) {
-    renderPass(target, (pass) => { pass.setPipeline(floorPipeline); pass.setBindGroup(0, bindGroup); pass.setVertexBuffer(0, floorVB); pass.draw(6); });
+    renderPass(
+      target,
+      (pass) => {
+        pass.setPipeline(floorPipeline);
+        pass.setBindGroup(0, bindGroup);
+        pass.setVertexBuffer(0, floorVB);
+        pass.draw(6);
+      }
+    );
   }
 }
 ```
 
-```js echo
+```js
 raster.sideBySide(floorVariants.map(({label, target}) => [label, target.canvas]))
 ```
 
@@ -1027,6 +1391,11 @@ f 6/2/9 7/1/9 9/5/9
 f 7/2/7 8/1/7 9/5/7
 f 8/2/8 5/1/8 9/5/8
 `;
+```
+
+The materials it names are in a second text file:
+
+```js echo
 const hutMTLText = `newmtl Walls
 Kd 1 1 1
 Ks 0.05 0.05 0.05
@@ -1055,10 +1424,16 @@ const hutParsed = obj.parseOBJ(hutOBJText);
 const hutMTL = obj.parseMTL(hutMTLText);
 ```
 
+Five quads and four triangles should give 14 triangles in all:
+
+```js echo
+hutParsed.triangles.length
+```
+
 The first `f` line, a quad, became the first two triangles. Note the
 0-based indices and the shared corner ${tex`c_0`}:
 
-```js echo
+```js
 Inputs.table(hutParsed.triangles.slice(0, 2).flatMap((tri, k) => tri.corners.map((c, j) => ({
   triangle: k, corner: j, "position p": c.p, "texcoord t": c.t, "normal n": c.n, material: tri.material
 }))))
@@ -1078,12 +1453,16 @@ are the **seams** from earlier in this module: wherever the texture
 coordinates (or the normals) are discontinuous, vertices are duplicated.
 
 ```js echo
-const hutGroups = [...objMesh.groupTrianglesByMaterial(hutParsed.triangles)].map(([name, triangles]) => ({
-  name, material: hutMTL[name], ...objMesh.buildIndexedMesh(hutParsed, triangles)
+const trianglesByMaterial =
+  [...objMesh.groupTrianglesByMaterial(hutParsed.triangles)];
+const hutGroups = trianglesByMaterial.map(([name, triangles]) => ({
+  name,
+  material: hutMTL[name],
+  ...objMesh.buildIndexedMesh(hutParsed, triangles)
 }));
 ```
 
-```js echo
+```js
 Inputs.table(hutGroups.map((g) => ({
   material: g.name, triangles: g.rawVertexCount / 3,
   "triangle corners": g.rawVertexCount, "GPU vertices": g.uniqueVertexCount,
@@ -1101,7 +1480,8 @@ loader fetches that file next to the OBJ and decodes it:
 ```js run=false
 const response = await fetch(new URL(material.map_Kd, objURL));
 const bitmap = await createImageBitmap(await response.blob());
-device.queue.copyExternalImageToTexture({source: bitmap}, {texture}, [bitmap.width, bitmap.height]);
+const size = [bitmap.width, bitmap.height];
+device.queue.copyExternalImageToTexture({source: bitmap}, {texture}, size);
 ```
 
 This page has no image files, so it maps each file name to a canvas
@@ -1110,7 +1490,7 @@ exactly as it would copy a decoded image. A material with no `map_Kd`
 gets a **1 × 1 white** texture, so the shader can always compute
 `Kd × texture` without a special case:
 
-```js echo
+```js
 // Planks: brown boards separated by dark grooves.
 const plankCanvas = (() => {
   const canvas = document.createElement("canvas");
@@ -1145,69 +1525,84 @@ const whiteCanvas = (() => {
 })();
 
 
-function textureFromCanvas(canvas, format) {
-  const texture = device.createTexture({size: [canvas.width, canvas.height], format,
-    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT});
-  device.queue.copyExternalImageToTexture({source: canvas}, {texture}, [canvas.width, canvas.height]);
-  return texture;
-}
-
-// Stand-ins for the image files named by map_Kd.
-const imageFiles = {"planks.png": plankCanvas, "shingles.png": shingleCanvas};
-const textureForMaterial = (m) => textureFromCanvas(imageFiles[m?.map_Kd] ?? whiteCanvas, "rgba8unorm");
 ```
 
-**Step 4: one textured pipeline.** Each vertex is 8 floats: position,
-normal, and UV. The fragment shader samples the material's texture,
-multiplies by `Kd`, and applies Lambert lighting:
+```js echo
+function textureFromCanvas(canvas, format) {
+  const texture = device.createTexture({
+    size: [canvas.width, canvas.height], format,
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+      | GPUTextureUsage.RENDER_ATTACHMENT
+  });
+  const size = [canvas.width, canvas.height];
+  device.queue.copyExternalImageToTexture({source: canvas}, {texture}, size);
+  return texture;
+}
+```
+
+The canvases stand in for the image files named by `map_Kd`:
+
+```js echo
+const imageFiles = {
+  "planks.png": plankCanvas, "shingles.png": shingleCanvas
+};
+const textureForMaterial = (m) =>
+  textureFromCanvas(imageFiles[m?.map_Kd] ?? whiteCanvas, "rgba8unorm");
+```
+
+**Step 4: one textured pipeline.** Each vertex is 8 floats: position, normal, and UV, the
+same layout as `uvVertexLayout` from the seam demo. Packing the mesh's three lists into one
+array follows that layout:
 
 ```js echo
 const VERTEX_FLOATS = 8;   // 3 position + 3 normal + 2 uv
-
 function packVertices(positions, normals, uvs) {
   const data = new Float32Array(positions.length * VERTEX_FLOATS);
   positions.forEach((p, i) => {
-    const n = normals[i], uv = uvs[i];
-    data.set([...p, ...n, ...uv], i * VERTEX_FLOATS);
+    data.set([...p, ...normals[i], ...uvs[i]], i * VERTEX_FLOATS);
   });
   return data;
 }
+```
 
+The fragment shader samples the material's texture, multiplies by `Kd`, and applies Lambert
+lighting. An untextured part simply reads white from its 1 × 1 texture:
+
+```js echo
+const wgslModelFragment = `
+@fragment
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+  let albedo = u.kd.rgb * textureSample(diffuseTex, samp, in.uv).rgb;
+  let L = normalize(vec3<f32>(0.4, 0.7, 0.55));
+  let ndotl = max(dot(normalize(in.normal), L), 0.0);
+  return vec4<f32>(albedo * (0.3 + 0.7 * ndotl), 1.0);
+}`;
+```
+
+```js
+const wgslUVVertex = `
+struct VertexOut {
+  @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>,
+  @location(1) uv: vec2<f32>
+};
+@vertex
+fn vs_main(@location(0) inPos: vec3<f32>, @location(1) inNormal: vec3<f32>, @location(2) inUV: vec2<f32>) -> VertexOut {
+  return VertexOut(u.mvp * vec4<f32>(inPos, 1.0), inNormal, inUV);
+}`;
 const modelModule = device.createShaderModule({code: `
 struct Uniforms { mvp: mat4x4<f32>, kd: vec4<f32> };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var diffuseTex: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
-
-struct VertexOut { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32> };
-
-@vertex
-fn vs_main(@location(0) inPos: vec3<f32>, @location(1) inNormal: vec3<f32>, @location(2) inUV: vec2<f32>) -> VertexOut {
-  var out: VertexOut;
-  out.position = u.mvp * vec4<f32>(inPos, 1.0);
-  out.normal = inNormal;
-  out.uv = inUV;
-  return out;
-}
-
-@fragment
-fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-  let albedo = u.kd.rgb * textureSample(diffuseTex, samp, in.uv).rgb;   // Kd x map_Kd
-  let ndotl = max(dot(normalize(in.normal), normalize(vec3<f32>(0.4, 0.7, 0.55))), 0.0);
-  return vec4<f32>(albedo * (0.3 + 0.7 * ndotl), 1.0);
-}`});
-
+${wgslUVVertex}${wgslModelFragment}`});
 const modelPipeline = device.createRenderPipeline({
   layout: "auto",
-  vertex: {module: modelModule, entryPoint: "vs_main", buffers: [{arrayStride: VERTEX_FLOATS * 4, attributes: [
-    {shaderLocation: 0, offset: 0, format: "float32x3"},        // position
-    {shaderLocation: 1, offset: 3 * 4, format: "float32x3"},    // normal
-    {shaderLocation: 2, offset: 6 * 4, format: "float32x2"}]}]},  // uv
+  vertex: {module: modelModule, entryPoint: "vs_main", buffers: [uvVertexLayout]},
   fragment: {module: modelModule, entryPoint: "fs_main", targets: [{format: canvasFormat}]},
   primitive: {topology: "triangle-list", cullMode: "none"},
   depthStencil: {format: "depth24plus", depthWriteEnabled: true, depthCompare: "less"}
 });
-const modelSampler = device.createSampler({magFilter: "linear", minFilter: "linear", addressModeU: "repeat", addressModeV: "repeat"});
+const modelSampler = device.createSampler({magFilter: "linear", minFilter: "linear", ...repeat});
 ```
 
 **Step 5: one draw per material.** Each `usemtl` group becomes a
@@ -1223,47 +1618,64 @@ Drawing the model means drawing every part:
 
 ```js echo
 function makeModelPart({vertices, indices, material}) {
-  const uniforms = device.createBuffer({size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
-  return {
-    mesh: new Mesh(device, {vertices, indices}),
-    kd: material?.Kd ?? [0.8, 0.8, 0.8],
-    uniforms,
-    bindGroup: device.createBindGroup({layout: modelPipeline.getBindGroupLayout(0), entries: [
+  const uniforms = device.createBuffer(
+    {size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST}
+  );
+  const bindGroup = device.createBindGroup({
+    layout: modelPipeline.getBindGroupLayout(0),
+    entries: [
       {binding: 0, resource: {buffer: uniforms}},
       {binding: 1, resource: textureForMaterial(material).createView()},
-      {binding: 2, resource: modelSampler}]})
-  };
+      {binding: 2, resource: modelSampler}
+    ]
+  });
+  const mesh = new Mesh(device, {vertices, indices});
+  return {mesh, kd: material?.Kd ?? [0.8, 0.8, 0.8], uniforms, bindGroup};
 }
+```
 
+Drawing the model means updating and drawing every part:
+
+```js echo
 function drawModel(target, parts, mvp) {
-  for (const part of parts) device.queue.writeBuffer(part.uniforms, 0, new Float32Array([...mvp, ...part.kd, 1]));
+  for (const part of parts) {
+    const data = new Float32Array([...mvp, ...part.kd, 1]);
+    device.queue.writeBuffer(part.uniforms, 0, data);
+  }
   renderPass(target, (pass) => {
     pass.setPipeline(modelPipeline);
     for (const part of parts) {
       pass.setBindGroup(0, part.bindGroup);
-      part.mesh.draw(pass);                                       // drawIndexed
+      part.mesh.draw(pass);
     }
   });
 }
 ```
 
+Each material group becomes one part:
+
 ```js echo
 const hutParts = hutGroups.map((g) => makeModelPart({
-  vertices: packVertices(g.positions, g.normals, g.uvs), indices: g.indices, material: g.material
+  vertices: packVertices(g.positions, g.normals, g.uvs),
+  indices: g.indices,
+  material: g.material
 }));
+```
+
+```js
 const hutModelTarget = await makeCanvas(300);
 ```
 
-```js echo
+```js
 const hutModelAzimuth = view(Inputs.range([-180, 180], {value: 40, step: 1, label: "orbit azimuth"}));
 ```
 
-```js echo
+```js
 drawModel(hutModelTarget, hutParts,
   mat4.multiply(transforms.perspective(0.7, 1, 0.1, 30), transforms.lookAt(orbitEye(hutModelAzimuth, 25, 5.2, [0, 1, 0]), [0, 1, 0], [0, 1, 0])));
 ```
 
-```js echo
+```js
 raster.sideBySide([
   ["planks.png", (() => { plankCanvas.style.width = "128px"; return plankCanvas; })()],
   ["shingles.png", (() => { shingleCanvas.style.width = "128px"; return shingleCanvas; })()],
@@ -1294,38 +1706,53 @@ this module is filled the same way: a cube is six layers with a
 different view.)
 
 ```js echo
-const layerCanvases = [plankCanvas, shingleCanvas];             // layer 0, layer 1
+const layerCanvases = [plankCanvas, shingleCanvas];   // layers 0 and 1
 const layerMips = layerCanvases.map((c) => mipmaps.generateMipCanvases(c));
-
 const materialArray = device.createTexture({
-  size: [128, 128, layerCanvases.length],                      // width, height, layers
+  size: [128, 128, layerCanvases.length],             // w, h, layers
   format: "rgba8unorm",
-  mipLevelCount: layerMips[0].length,                          // 128 → 1 is 8 levels
-  usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT
+  mipLevelCount: layerMips[0].length,                 // 128 → 1 is 8 levels
+  usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+    | GPUTextureUsage.RENDER_ATTACHMENT
 });
+```
+
+The copy visits every level of every layer:
+
+```js echo
 layerMips.forEach((levels, layer) => levels.forEach((canvas, mipLevel) => {
-  device.queue.copyExternalImageToTexture({source: canvas},
-    {texture: materialArray, mipLevel, origin: [0, 0, layer]}, [canvas.width, canvas.height]);
+  device.queue.copyExternalImageToTexture(
+    {source: canvas},
+    {texture: materialArray, mipLevel, origin: [0, 0, layer]},
+    [canvas.width, canvas.height]
+  );
 }));
+```
+
+The view is what tells the shader it is looking at an array:
+
+```js echo
 const materialArrayView = materialArray.createView({dimension: "2d-array"});
-const arraySampler = device.createSampler({magFilter: "linear", minFilter: "linear", mipmapFilter: "linear",
-  addressModeU: "repeat", addressModeV: "repeat"});
+const arraySampler = device.createSampler({...trilinear});
 ```
 
 Each layer's mip chain, built on the CPU (level 0 on the left):
 
-```js echo
+```js
 function mipStrip(levels) {
   const strip = document.createElement("canvas");
   strip.width = levels.reduce((w, c) => w + c.width + 4, 0);
   strip.height = levels[0].height;
   const ctx = strip.getContext("2d");
   let x = 0;
-  for (const c of levels) { ctx.drawImage(c, x, strip.height - c.height); x += c.width + 4; }
+  for (const c of levels) {
+    ctx.drawImage(c, x, strip.height - c.height);
+    x += c.width + 4;
+  }
   strip.style.width = `${strip.width}px`;
   return strip;
 }
-raster.sideBySide(layerMips.map((levels, layer) => [`layer ${layer}: ${levels.length} levels`, mipStrip(levels)]))
+display(raster.sideBySide(layerMips.map((levels, layer) => [`layer ${layer}: ${levels.length} levels`, mipStrip(levels)])));
 ```
 
 **The model** is the hut again. Its two parts keep their meshes from
@@ -1337,61 +1764,68 @@ layer (a `u32`) next to its matrix and `Kd`. Each part still gets its
 own uniform buffer and bind group, but **both bind groups point at the
 same texture view**:
 
-```js echo
-const layerOfFile = {"planks.png": 0, "shingles.png": 1};     // the order of layerCanvases
+The fragment shader has one changed line, where the layer picks the image:
 
+```js echo
+const wgslArrayFragment = `
+@fragment
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+  let c = textureSample(materials, samp, in.uv, u.layer).rgb;
+  let L = normalize(vec3<f32>(0.4, 0.7, 0.55));
+  let ndotl = max(dot(normalize(in.normal), L), 0.0);
+  return vec4<f32>(u.kd.rgb * c * (0.3 + 0.7 * ndotl), 1.0);
+}`;
+```
+
+```js
 const arrayModule = device.createShaderModule({code: `
 struct Uniforms { mvp: mat4x4<f32>, kd: vec4<f32>, layer: u32 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var materials: texture_2d_array<f32>;
 @group(0) @binding(2) var samp: sampler;
-
-struct VertexOut { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) uv: vec2<f32> };
-
-@vertex
-fn vs_main(@location(0) inPos: vec3<f32>, @location(1) inNormal: vec3<f32>, @location(2) inUV: vec2<f32>) -> VertexOut {
-  var out: VertexOut;
-  out.position = u.mvp * vec4<f32>(inPos, 1.0);
-  out.normal = inNormal;
-  out.uv = inUV;
-  return out;
-}
-
-@fragment
-fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-  let albedo = u.kd.rgb * textureSample(materials, samp, in.uv, u.layer).rgb;   // the layer picks the image
-  let ndotl = max(dot(normalize(in.normal), normalize(vec3<f32>(0.4, 0.7, 0.55))), 0.0);
-  return vec4<f32>(albedo * (0.3 + 0.7 * ndotl), 1.0);
-}`});
+${wgslUVVertex}${wgslArrayFragment}`});
 const arrayPipeline = device.createRenderPipeline({
   layout: "auto",
-  vertex: {module: arrayModule, entryPoint: "vs_main", buffers: [{arrayStride: VERTEX_FLOATS * 4, attributes: [
-    {shaderLocation: 0, offset: 0, format: "float32x3"},
-    {shaderLocation: 1, offset: 3 * 4, format: "float32x3"},
-    {shaderLocation: 2, offset: 6 * 4, format: "float32x2"}]}]},
+  vertex: {module: arrayModule, entryPoint: "vs_main", buffers: [uvVertexLayout]},
   fragment: {module: arrayModule, entryPoint: "fs_main", targets: [{format: canvasFormat}]},
   primitive: {topology: "triangle-list", cullMode: "none"},
   depthStencil: {format: "depth24plus", depthWriteEnabled: true, depthCompare: "less"}
 });
-
-const ARRAY_UNIFORM_BYTES = 96;   // 64 (mvp) + 16 (kd) + 4 (layer), rounded up to a multiple of 16
-const hutArrayParts = hutParts.map((part, i) => {
-  const uniforms = device.createBuffer({size: ARRAY_UNIFORM_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
-  return {
-    mesh: part.mesh,                                           // the same geometry as Step 5
-    kd: part.kd,
-    layer: layerOfFile[hutGroups[i].material.map_Kd],
-    uniforms,
-    bindGroup: device.createBindGroup({layout: arrayPipeline.getBindGroupLayout(0), entries: [
-      {binding: 0, resource: {buffer: uniforms}},
-      {binding: 1, resource: materialArrayView},               // shared by every part
-      {binding: 2, resource: arraySampler}]})
-  };
-});
 const arrayTarget = await makeCanvas(300);
 ```
 
+The uniform struct now holds a matrix (64 bytes), `Kd` (16 bytes), and an integer (4
+bytes). WGSL rounds a struct up to a multiple of 16 bytes, so its size is 96, not 84.
+Each part records which layer its image file uses, and every bind group shares the same
+view:
+
 ```js echo
+const ARRAY_UNIFORM_BYTES = 96;
+const layerOfFile = {"planks.png": 0, "shingles.png": 1};
+function makeArrayBindGroup(uniforms) {
+  return device.createBindGroup({
+    layout: arrayPipeline.getBindGroupLayout(0),
+    entries: [
+      {binding: 0, resource: {buffer: uniforms}},
+      {binding: 1, resource: materialArrayView},
+      {binding: 2, resource: arraySampler}
+    ]
+  });
+}
+```
+
+```js echo
+const hutArrayParts = hutParts.map((part, i) => {
+  const uniforms = device.createBuffer({
+    size: ARRAY_UNIFORM_BYTES,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+  });
+  const layer = layerOfFile[hutGroups[i].material.map_Kd];
+  return {...part, layer, uniforms, bindGroup: makeArrayBindGroup(uniforms)};
+});
+```
+
+```js
 const arrayForm = view(Inputs.form({
   azimuth: Inputs.range([-180, 180], {value: 40, step: 1, label: "orbit azimuth"}),
   swap: Inputs.toggle({value: false, label: "swap the layers"})
@@ -1403,22 +1837,32 @@ The uniforms mix types, so they are written through two views of one
 the layer:
 
 ```js echo
+function writeArrayUniforms(part, mvp, layer) {
+  const data = new ArrayBuffer(ARRAY_UNIFORM_BYTES);
+  new Float32Array(data, 0, 20).set([...mvp, ...part.kd, 1]);
+  new Uint32Array(data, 80, 1)[0] = layer;
+  device.queue.writeBuffer(part.uniforms, 0, data);
+}
+```
+
+```js
 {
-  const mvp = mat4.multiply(transforms.perspective(0.7, 1, 0.1, 30), transforms.lookAt(orbitEye(arrayForm.azimuth, 25, 5.2, [0, 1, 0]), [0, 1, 0], [0, 1, 0]));
-  for (const part of hutArrayParts) {
-    const data = new ArrayBuffer(ARRAY_UNIFORM_BYTES);
-    new Float32Array(data, 0, 20).set([...mvp, ...part.kd, 1]);                          // mvp, kd
-    new Uint32Array(data, 80, 1)[0] = arrayForm.swap ? 1 - part.layer : part.layer;     // layer
-    device.queue.writeBuffer(part.uniforms, 0, data);
-  }
+  const mvp = mat4.multiply(
+    transforms.perspective(0.7, 1, 0.1, 30),
+    transforms.lookAt(orbitEye(arrayForm.azimuth, 25, 5.2, [0, 1, 0]), [0, 1, 0], [0, 1, 0])
+  );
+  for (const part of hutArrayParts) writeArrayUniforms(part, mvp, arrayForm.swap ? 1 - part.layer : part.layer);
   renderPass(arrayTarget, (pass) => {
     pass.setPipeline(arrayPipeline);
-    for (const part of hutArrayParts) { pass.setBindGroup(0, part.bindGroup); part.mesh.draw(pass); }
+    for (const part of hutArrayParts) {
+      pass.setBindGroup(0, part.bindGroup);
+      part.mesh.draw(pass);
+    }
   });
 }
 ```
 
-```js echo
+```js
 raster.sideBySide([[`${hutArrayParts.length} parts, one texture array`, arrayTarget.canvas]])
 ```
 
@@ -1453,58 +1897,89 @@ from the OBJ section, this time as one indexed mesh:
 
 ```js echo
 const hutMesh = objMesh.buildIndexedMesh(hutParsed, hutParsed.triangles);
-const hutTangents = objMesh.computeTangents(hutMesh.positions, hutMesh.uvs, hutMesh.indices);
+const hutTangents =
+  objMesh.computeTangents(hutMesh.positions, hutMesh.uvs, hutMesh.indices);
+```
 
-// The normal map derived from the planks' groove height field.
+```js
 const plankHeight = (u, v) => { const l = (v * 6) % 1; return Math.max(0, 0.4 - Math.min(l, 1 - l) * 4); };
 const plankNormalCanvas = imageCanvas(128, 128, (x, y) => normalFromHeight(plankHeight, x / 128, y / 128, 2).map((c) => 255 * (c * 0.5 + 0.5)));
-
 const hutAlbedo = textureFromCanvas(plankCanvas, "rgba8unorm");
 const hutNormalMap = textureFromCanvas(plankNormalCanvas, "rgba8unorm");
-const hutSampler = device.createSampler({magFilter: "linear", minFilter: "linear", addressModeU: "repeat", addressModeV: "repeat"});
+const hutSampler = device.createSampler({magFilter: "linear", minFilter: "linear", ...repeat});
+```
 
+Each vertex now holds 11 floats: position, normal, UV, and the tangent:
+
+```js echo
 const hutData = new Float32Array(hutMesh.positions.length * 11);
 hutMesh.positions.forEach((p, i) => {
   const n = hutMesh.normals[i], uv = hutMesh.uvs[i], t = hutTangents[i];
   hutData.set([...p, ...n, ...uv, ...t], i * 11);
 });
-const hutGPUMesh = new Mesh(device, {vertices: hutData, indices: hutMesh.indices});
+const hutGPUMesh =
+  new Mesh(device, {vertices: hutData, indices: hutMesh.indices});
+```
 
+A normal map stores directions in colors. The decode ${tex`\mathbf n = 2\mathbf c - 1`}
+undoes the encoding from the bump map section, so the neutral color
+(0.5, 0.5, 1) should decode to straight along the surface normal, (0, 0, 1):
+
+```js echo
+[0.5, 0.5, 1].map((c) => 2 * c - 1)
+```
+
+The shader does the same decode, then rotates the result into world space. Interpolation can
+leave ${tex`\mathbf T`} no longer perpendicular to ${tex`\mathbf N`}, so the first step
+removes the part of ${tex`\mathbf T`} along ${tex`\mathbf N`}:
+
+```js echo
+const wgslMappedNormal = `
+fn mappedNormal(
+  N0: vec3<f32>, tangent: vec3<f32>, uv: vec2<f32>
+) -> vec3<f32> {
+  let T = normalize(tangent - N0 * dot(tangent, N0));
+  let B = cross(N0, T);
+  let c = textureSample(normalTex, samp, uv).rgb;
+  return normalize(mat3x3<f32>(T, B, N0) * (2.0 * c - 1.0));
+}`;
+```
+
+The rest of the fragment shader lights the albedo with whichever normal the toggle selects:
+
+```js echo
+const wgslHutFragment = `
+@fragment
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+  let N0 = normalize(in.worldNormal);
+  let mapped = mappedNormal(N0, in.worldTangent, in.uv);
+  let N = select(N0, mapped, u.params.x > 0.5);
+  let albedo = textureSample(albedoTex, samp, in.uv).rgb;
+  let ndotl = max(dot(N, normalize(vec3<f32>(0.4, 0.7, 0.55))), 0.0);
+  return vec4<f32>(albedo * (0.25 + 0.75 * ndotl), 1.0);
+}`;
+```
+
+```js
 const hutModule = device.createShaderModule({code: `
 struct Uniforms { mvp: mat4x4<f32>, params: vec4<f32> };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var albedoTex: texture_2d<f32>;
 @group(0) @binding(2) var normalTex: texture_2d<f32>;
 @group(0) @binding(3) var samp: sampler;
-
 struct VertexOut {
   @builtin(position) position: vec4<f32>,
   @location(0) worldNormal: vec3<f32>, @location(1) worldTangent: vec3<f32>, @location(2) uv: vec2<f32>,
 };
-
 @vertex
 fn vs_main(@location(0) inPos: vec3<f32>, @location(1) inNormal: vec3<f32>,
            @location(2) inUV: vec2<f32>, @location(3) inTangent: vec3<f32>) -> VertexOut {
-  var out: VertexOut;
-  out.position = u.mvp * vec4<f32>(inPos, 1.0);
-  out.worldNormal = inNormal;    // the model matrix is the identity here
-  out.worldTangent = inTangent;
-  out.uv = inUV;
-  return out;
+  return VertexOut(u.mvp * vec4<f32>(inPos, 1.0), inNormal, inTangent, inUV);
 }
+${wgslMappedNormal}${wgslHutFragment}`});
+```
 
-@fragment
-fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-  let N0 = normalize(in.worldNormal);
-  let T = normalize(in.worldTangent - N0 * dot(in.worldTangent, N0));   // re-orthogonalize after interpolation
-  let B = cross(N0, T);
-  let c = textureSample(normalTex, samp, in.uv).rgb;
-  let mapped = normalize(mat3x3<f32>(T, B, N0) * (2.0 * c - 1.0));       // [T B N] (2c - 1)
-  let N = select(N0, mapped, u.params.x > 0.5);
-  let albedo = textureSample(albedoTex, samp, in.uv).rgb;
-  let ndotl = max(dot(N, normalize(vec3<f32>(0.4, 0.7, 0.55))), 0.0);
-  return vec4<f32>(albedo * (0.25 + 0.75 * ndotl), 1.0);
-}`});
+```js
 const hutPipeline = device.createRenderPipeline({
   layout: "auto",
   vertex: {module: hutModule, entryPoint: "vs_main", buffers: [{arrayStride: 44, attributes: [
@@ -1521,17 +1996,25 @@ const hutBindGroup = device.createBindGroup({layout: hutPipeline.getBindGroupLay
 const hutTarget = await makeCanvas(300);
 ```
 
-```js echo
+```js
 const hutForm = view(Inputs.form({
   normalMap: Inputs.toggle({value: true, label: "use normal map"}),
   azimuth: Inputs.range([-180, 180], {value: 40, step: 1, label: "orbit azimuth"})
 }));
 ```
 
-```js echo
+```js
 {
-  const mvp = mat4.multiply(transforms.perspective(0.7, 1, 0.1, 30), transforms.lookAt(orbitEye(hutForm.azimuth, 25, 5.2, [0, 1, 0]), [0, 1, 0], [0, 1, 0]));
-  device.queue.writeBuffer(hutUniforms, 0, new Float32Array([...mvp, hutForm.normalMap ? 1 : 0, 0, 0, 0]));
+  const mvp = mat4.multiply(
+    transforms.perspective(0.7, 1, 0.1, 30),
+    transforms.lookAt(
+      orbitEye(hutForm.azimuth, 25, 5.2, [0, 1, 0]), [0, 1, 0], [0, 1, 0]
+    )
+  );
+  device.queue.writeBuffer(
+    hutUniforms, 0,
+    new Float32Array([...mvp, hutForm.normalMap ? 1 : 0, 0, 0, 0])
+  );
   renderPass(hutTarget, (pass) => {
     pass.setPipeline(hutPipeline); pass.setBindGroup(0, hutBindGroup);
     hutGPUMesh.draw(pass);
@@ -1539,7 +2022,7 @@ const hutForm = view(Inputs.form({
 }
 ```
 
-```js echo
+```js
 raster.sideBySide([["normal map", (() => { plankNormalCanvas.style.width = "128px"; return plankNormalCanvas; })()], ["normal-mapped hut", hutTarget.canvas]])
 ```
 
@@ -1551,9 +2034,9 @@ same geometry, same albedo, only the lighting normal changes.
 A cube texture has **six layers**, viewed with `dimension: "cube"`, and
 is sampled with a 3D **direction** rather than ${tex`(u,v)`}. The GPU
 picks the face. Each face below is a canvas painted with a sky gradient
-and its own label:
+and its own label.
 
-```js echo
+```js
 const faceNames = ["+X", "−X", "+Y", "−Y", "+Z", "−Z"];
 const envTexture = (() => {
   const size = 256;
@@ -1575,31 +2058,56 @@ const envTexture = (() => {
   });
   return texture;
 })();
+```
+
+The formula ${tex`\mathbf r = \mathbf v - 2(\mathbf v\cdot\mathbf n)\mathbf n`} is
+easy to test on the CPU. Looking straight at a surface, the reflection should come straight
+back. Looking down at 45° onto a floor, it should bounce up at 45°:
+
+```js echo
+function reflectVector(v, n) {
+  const k = 2 * d3.sum([0, 1, 2], (i) => v[i] * n[i]);
+  return v.map((c, i) => c - k * n[i]);
+}
+```
+
+```js echo
+[reflectVector([0, 0, -1], [0, 0, 1]), reflectVector([1, -1, 0], [0, 1, 0])]
+  .map((r) => `(${r.join(", ")})`)
+```
+
+The shader computes the same thing with WGSL's built-in `reflect`, then samples the cube map
+with that **direction**. The toggle below can substitute the view direction itself:
+
+```js echo
+const wgslEnvFragment = `
+@fragment
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+  let v = normalize(in.worldPos - u.eye.xyz);
+  let r = reflect(v, normalize(in.normal));
+  let dir = select(r, v, u.params.x > 0.5);
+  return vec4<f32>(textureSample(envTex, envSamp, dir).rgb, 1.0);
+}`;
+```
+
+```js
 const envModule = device.createShaderModule({code: `
 struct Uniforms { mvp: mat4x4<f32>, eye: vec4<f32>, params: vec4<f32> };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var envTex: texture_cube<f32>;
 @group(0) @binding(2) var envSamp: sampler;
-
-struct VertexOut { @builtin(position) position: vec4<f32>, @location(0) worldPos: vec3<f32>, @location(1) normal: vec3<f32> };
-
+struct VertexOut {
+  @builtin(position) position: vec4<f32>, @location(0) worldPos: vec3<f32>,
+  @location(1) normal: vec3<f32>
+};
 @vertex
 fn vs_main(@location(0) inPos: vec3<f32>, @location(1) inNormal: vec3<f32>) -> VertexOut {
-  var out: VertexOut;
-  out.position = u.mvp * vec4<f32>(inPos, 1.0);
-  out.worldPos = inPos;
-  out.normal = inNormal;
-  return out;
+  return VertexOut(u.mvp * vec4<f32>(inPos, 1.0), inPos, inNormal);
 }
+${wgslEnvFragment}`});
+```
 
-@fragment
-fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-  let v = normalize(in.worldPos - u.eye.xyz);   // view ray direction
-  let n = normalize(in.normal);
-  let r = reflect(v, n);                        // r = v - 2 (v·n) n
-  let dir = select(r, v, u.params.x > 0.5);     // params.x = 1: look straight through (a window, not a mirror)
-  return vec4<f32>(textureSample(envTex, envSamp, dir).rgb, 1.0);
-}`});
+```js
 const envPipeline = device.createRenderPipeline({
   layout: "auto",
   vertex: {module: envModule, entryPoint: "vs_main", buffers: [{arrayStride: 24, attributes: [
@@ -1617,7 +2125,7 @@ const envBindGroup = device.createBindGroup({layout: envPipeline.getBindGroupLay
 const envTarget = await makeCanvas(300);
 ```
 
-```js echo
+```js
 const envForm = view(Inputs.form({
   azimuth: Inputs.range([-180, 180], {value: 0, step: 1, label: "orbit azimuth"}),
   elevation: Inputs.range([-80, 80], {value: 10, step: 1, label: "orbit elevation"}),
@@ -1625,11 +2133,17 @@ const envForm = view(Inputs.form({
 }));
 ```
 
-```js echo
+```js
 {
   const eye = orbitEye(envForm.azimuth, envForm.elevation, 3);
-  const mvp = mat4.multiply(transforms.perspective(0.8, 1, 0.1, 20), transforms.lookAt(eye, [0, 0, 0], [0, 1, 0]));
-  device.queue.writeBuffer(envUniforms, 0, new Float32Array([...mvp, ...eye, 1, envForm.through ? 1 : 0, 0, 0, 0]));
+  const mvp = mat4.multiply(
+    transforms.perspective(0.8, 1, 0.1, 20),
+    transforms.lookAt(eye, [0, 0, 0], [0, 1, 0])
+  );
+  device.queue.writeBuffer(
+    envUniforms, 0,
+    new Float32Array([...mvp, ...eye, 1, envForm.through ? 1 : 0, 0, 0, 0])
+  );
   renderPass(envTarget, (pass) => {
     pass.setPipeline(envPipeline); pass.setBindGroup(0, envBindGroup);
     envMesh.draw(pass);
@@ -1637,7 +2151,7 @@ const envForm = view(Inputs.form({
 }
 ```
 
-```js echo
+```js
 envTarget.canvas
 ```
 
@@ -1672,76 +2186,189 @@ light's view with the stored depth, using a **comparison sampler**:
 
 ```js echo
 const SHADOW_SIZE = 1024;
-const shadowMap = device.createTexture({size: [SHADOW_SIZE, SHADOW_SIZE], format: "depth32float",
-  usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING});
+const shadowMap = device.createTexture({
+  size: [SHADOW_SIZE, SHADOW_SIZE], format: "depth32float",
+  usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+});
+```
 
-const sceneLayout = device.createBindGroupLayout({entries: [{binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {type: "uniform"}}]});
-const objectLayout = device.createBindGroupLayout({entries: [{binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {type: "uniform"}}]});
+The shadow map is a depth texture we can both render into and read from. Three bind group
+layouts come next, one for what changes per scene, one per object, and one for the shadow map.
+The first two are ordinary uniforms:
+
+```js echo
+const uniformLayout = () => device.createBindGroupLayout({entries: [{
+  binding: 0,
+  visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+  buffer: {type: "uniform"}
+}]});
+const sceneLayout = uniformLayout(), objectLayout = uniformLayout();
+```
+
+The third declares a `"depth"` texture and a `"comparison"` sampler:
+
+```js echo
 const shadowLayout = device.createBindGroupLayout({entries: [
-  {binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {sampleType: "depth"}},
-  {binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {type: "comparison"}}]});
+  {binding: 0, visibility: GPUShaderStage.FRAGMENT,
+   texture: {sampleType: "depth"}},
+  {binding: 1, visibility: GPUShaderStage.FRAGMENT,
+   sampler: {type: "comparison"}}
+]});
+```
 
-const shadowModule = device.createShaderModule({code: `
-struct Scene { camVP: mat4x4<f32>, lightVP: mat4x4<f32>, lightDir: vec4<f32>, params: vec4<f32> };  // params: bias, pcf, texel
+The comparison sampler performs the depth test. `compare: "less"` returns 1 when the reference
+depth is less than the stored depth, meaning nothing blocks the light. Linear filtering
+averages neighboring results, which is a 2 × 2 hardware PCF:
+
+```js echo
+const comparisonSampler = device.createSampler(
+  {compare: "less", magFilter: "linear", minFilter: "linear"}
+);
+```
+
+Both passes share one shader module. The scene's `params` hold the bias, the PCF switch, and
+the size of one shadow-map texel:
+
+```js echo
+const wgslShadowDecls = `
+struct Scene {
+  camVP: mat4x4<f32>, lightVP: mat4x4<f32>, lightDir: vec4<f32>,
+  params: vec4<f32>
+};
 struct Object { model: mat4x4<f32>, color: vec4<f32> };
 @group(0) @binding(0) var<uniform> scene: Scene;
 @group(1) @binding(0) var<uniform> object: Object;
 @group(2) @binding(0) var shadowTex: texture_depth_2d;
-@group(2) @binding(1) var shadowSmp: sampler_comparison;
+@group(2) @binding(1) var shadowSmp: sampler_comparison;`;
+```
 
-// Pass 1: depth only, seen from the light.
+**Pass 1** needs only the light's view of each vertex:
+
+```js echo
+const wgslDepthVertex = `
 @vertex
 fn vs_depth(@location(0) pos: vec3<f32>) -> @builtin(position) vec4<f32> {
   return scene.lightVP * object.model * vec4<f32>(pos, 1.0);
-}
+}`;
+```
 
-struct VertexOut { @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>, @location(1) lightClip: vec4<f32> };
+**Pass 2** computes each vertex's position twice, once for the camera and once for the light.
+The rasterizer interpolates the light's version across the triangle:
 
-// Pass 2: from the camera.
+```js echo
+const wgslMainVertex = `
+struct VertexOut {
+  @builtin(position) position: vec4<f32>, @location(0) normal: vec3<f32>,
+  @location(1) lightClip: vec4<f32>
+};
 @vertex
-fn vs_main(@location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>) -> VertexOut {
+fn vs_main(
+  @location(0) pos: vec3<f32>, @location(1) normal: vec3<f32>
+) -> VertexOut {
   let world = object.model * vec4<f32>(pos, 1.0);
-  var out: VertexOut;
-  out.position = scene.camVP * world;
-  out.normal = (object.model * vec4<f32>(normal, 0.0)).xyz;
-  out.lightClip = scene.lightVP * world;
-  return out;
-}
+  return VertexOut(scene.camVP * world,
+    (object.model * vec4<f32>(normal, 0.0)).xyz, scene.lightVP * world);
+}`;
+```
 
+At each fragment, that position must become a shadow-map lookup. Dividing by ${tex`w`} gives NDC.
+Texture coordinates run from 0 to 1 with ${tex`v`} pointing down, the opposite of NDC ${tex`y`}.
+Here is the mapping on the CPU. NDC (−1, 1), the top-left, should map to texture (0, 0), and the
+center (0, 0) to (0.5, 0.5):
+
+```js echo
+const ndcToShadowUV = ([x, y]) => [x * 0.5 + 0.5, y * -0.5 + 0.5];
+```
+
+```js echo
+[ndcToShadowUV([-1, 1]), ndcToShadowUV([0, 0])]
+  .map((p) => `(${p.join(", ")})`)
+```
+
+PCF repeats the comparison at 25 nearby texels and averages the 0/1 answers. It averages
+**answers**, not depths:
+
+```js echo
+const wgslPCF = `
+fn pcfLit(uv: vec2<f32>, refDepth: f32) -> f32 {
+  var lit = 0.0;
+  for (var dy = -2; dy <= 2; dy++) { for (var dx = -2; dx <= 2; dx++) {
+    let shift = vec2<f32>(f32(dx), f32(dy)) * scene.params.z;
+    let at = uv + shift;
+    lit += textureSampleCompareLevel(shadowTex, shadowSmp, at, refDepth);
+  } }
+  return lit / 25.0;
+}`;
+```
+
+The fragment shader puts these together. Subtracting the bias from the depth is what prevents a
+surface from shadowing itself. Shadow scales only the direct light, not the ambient term:
+
+```js echo
+const wgslShadowFragment = `
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
   let ndc = in.lightClip.xyz / in.lightClip.w;
-  let uv = ndc.xy * vec2<f32>(0.5, -0.5) + 0.5;   // NDC -> texture coordinates (v points down)
-  let refDepth = ndc.z - scene.params.x;          // d - bias
-  var lit = 0.0;
-  if (scene.params.y > 0.5) {                     // 5 x 5 percentage-closer filtering
-    for (var dy = -2; dy <= 2; dy++) {
-      for (var dx = -2; dx <= 2; dx++) {
-        lit += textureSampleCompareLevel(shadowTex, shadowSmp, uv + vec2<f32>(f32(dx), f32(dy)) * scene.params.z, refDepth);
-      }
-    }
-    lit /= 25.0;
-  } else {
-    lit = textureSampleCompareLevel(shadowTex, shadowSmp, uv, refDepth);   // 1 = lit, 0 = shadowed
-  }
+  let uv = ndc.xy * vec2<f32>(0.5, -0.5) + 0.5;
+  let d = ndc.z - scene.params.x;
+  let lit = select(textureSampleCompareLevel(shadowTex, shadowSmp, uv, d),
+    pcfLit(uv, d), scene.params.y > 0.5);
   let ndotl = max(dot(normalize(in.normal), -scene.lightDir.xyz), 0.0);
   return vec4<f32>(object.color.rgb * (0.25 + 0.75 * ndotl * lit), 1.0);
-}`});
-const meshLayout = {arrayStride: 24, attributes: [{shaderLocation: 0, offset: 0, format: "float32x3"}, {shaderLocation: 1, offset: 12, format: "float32x3"}]};
+}`;
+```
+
+```js echo
+const shadowModule = device.createShaderModule({code: [wgslShadowDecls,
+  wgslDepthVertex, wgslMainVertex, wgslPCF, wgslShadowFragment].join("\n")});
+const meshLayout = {
+  arrayStride: 24,
+  attributes: [
+    {shaderLocation: 0, offset: 0, format: "float32x3"},
+    {shaderLocation: 1, offset: 12, format: "float32x3"}
+  ]
+};
+```
+
+The depth pipeline has **no fragment stage**, because pass 1 writes only depth:
+
+```js echo
 const depthPipeline = device.createRenderPipeline({
-  layout: device.createPipelineLayout({bindGroupLayouts: [sceneLayout, objectLayout]}),
-  vertex: {module: shadowModule, entryPoint: "vs_depth", buffers: [meshLayout]},   // no fragment stage: depth only
+  layout: device.createPipelineLayout(
+    {bindGroupLayouts: [sceneLayout, objectLayout]}
+  ),
+  vertex: {
+    module: shadowModule, entryPoint: "vs_depth", buffers: [meshLayout]
+  },
   primitive: {topology: "triangle-list", cullMode: "back"},
-  depthStencil: {format: "depth32float", depthWriteEnabled: true, depthCompare: "less"}
+  depthStencil: {
+    format: "depth32float", depthWriteEnabled: true, depthCompare: "less"
+  }
 });
+```
+
+The shaded pipeline is a normal one, and it adds the shadow layout:
+
+```js echo
 const shadedPipeline = device.createRenderPipeline({
-  layout: device.createPipelineLayout({bindGroupLayouts: [sceneLayout, objectLayout, shadowLayout]}),
-  vertex: {module: shadowModule, entryPoint: "vs_main", buffers: [meshLayout]},
-  fragment: {module: shadowModule, entryPoint: "fs_main", targets: [{format: canvasFormat}]},
+  layout: device.createPipelineLayout(
+    {bindGroupLayouts: [sceneLayout, objectLayout, shadowLayout]}
+  ),
+  vertex: {
+    module: shadowModule, entryPoint: "vs_main", buffers: [meshLayout]
+  },
+  fragment: {
+    module: shadowModule, entryPoint: "fs_main",
+    targets: [{format: canvasFormat}]
+  },
   primitive: {topology: "triangle-list", cullMode: "back"},
-  depthStencil: {format: "depth24plus", depthWriteEnabled: true, depthCompare: "less"}
+  depthStencil: {
+    format: "depth24plus", depthWriteEnabled: true, depthCompare: "less"
+  }
 });
-const comparisonSampler = device.createSampler({compare: "less", magFilter: "linear", minFilter: "linear"});  // linear: 2 × 2 hardware PCF
+```
+
+```js
 const shadowBindGroup = device.createBindGroup({layout: shadowLayout, entries: [
   {binding: 0, resource: shadowMap.createView()}, {binding: 1, resource: comparisonSampler}]});
 const sceneUniforms = device.createBuffer({size: 160, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
@@ -1776,7 +2403,7 @@ const sceneObjects = [
 const shadowTarget = await makeCanvas(340);
 ```
 
-```js echo
+```js
 const shadowForm = view(Inputs.form({
   azimuth: Inputs.range([-180, 180], {value: 50, step: 1, label: "light azimuth"}),
   elevation: Inputs.range([15, 85], {value: 45, step: 1, label: "light elevation"}),
@@ -1785,42 +2412,95 @@ const shadowForm = view(Inputs.form({
 }));
 ```
 
-```js echo
-{
-  const lightPos = orbitEye(shadowForm.azimuth, shadowForm.elevation, 8);
-  const lightDir = lightPos.map((c) => -c / Math.hypot(...lightPos));       // direction the light travels
-  const lightVP = mat4.multiply(transforms.ortho(-4.5, 4.5, -4.5, 4.5, 1, 16), transforms.lookAt(lightPos, [0, 0, 0], [0, 1, 0]));
-  const camVP = mat4.multiply(transforms.perspective(0.8, 1, 0.1, 40), transforms.lookAt([3.2, 4.2, 6.5], [0, 0.3, 0], [0, 1, 0]));
-  device.queue.writeBuffer(sceneUniforms, 0, new Float32Array([...camVP, ...lightVP, ...lightDir, 0, shadowForm.bias, shadowForm.pcf ? 1 : 0, 1 / SHADOW_SIZE, 0]));
+Both passes draw every object the same way, binding its model matrix and color at group 1:
 
-  const encoder = device.createCommandEncoder();
-  // Pass 1: render depth from the light into the shadow map.
-  const depthPass = encoder.beginRenderPass({colorAttachments: [],
-    depthStencilAttachment: {view: shadowMap.createView(), depthClearValue: 1, depthLoadOp: "clear", depthStoreOp: "store"}});
-  depthPass.setPipeline(depthPipeline);
-  depthPass.setBindGroup(0, sceneBindGroup);
+```js echo
+function drawSceneObjects(pass) {
   for (const o of sceneObjects) {
-    depthPass.setBindGroup(1, o.bindGroup);
-    o.gpuMesh.draw(depthPass);
+    pass.setBindGroup(1, o.bindGroup);
+    o.gpuMesh.draw(pass);
   }
-  depthPass.end();
-  // Pass 2: render from the camera, reading the shadow map.
-  const mainPass = encoder.beginRenderPass({
-    colorAttachments: [{view: shadowTarget.context.getCurrentTexture().createView(), clearValue: {r: 0.05, g: 0.05, b: 0.08, a: 1}, loadOp: "clear", storeOp: "store"}],
-    depthStencilAttachment: {view: shadowTarget.depthTexture.createView(), depthClearValue: 1, depthLoadOp: "clear", depthStoreOp: "store"}});
-  mainPass.setPipeline(shadedPipeline);
-  mainPass.setBindGroup(0, sceneBindGroup);
-  mainPass.setBindGroup(2, shadowBindGroup);
-  for (const o of sceneObjects) {
-    mainPass.setBindGroup(1, o.bindGroup);
-    o.gpuMesh.draw(mainPass);
-  }
-  mainPass.end();
-  device.queue.submit([encoder.finish()]);
 }
 ```
 
+**Pass 1** renders from the light, with no color attachments at all. Its only output is the
+depth in the shadow map:
+
 ```js echo
+function encodeDepthPass(encoder) {
+  const pass = encoder.beginRenderPass({
+    colorAttachments: [],
+    depthStencilAttachment: {
+      view: shadowMap.createView(), depthClearValue: 1,
+      depthLoadOp: "clear", depthStoreOp: "store"
+    }
+  });
+  pass.setPipeline(depthPipeline);
+  pass.setBindGroup(0, sceneBindGroup);
+  drawSceneObjects(pass);
+  pass.end();
+}
+```
+
+**Pass 2** renders from the camera. The only new step is binding the shadow map at group 2, for
+the fragment shader to read:
+
+```js echo
+function encodeMainPass(encoder) {
+  const pass = encoder.beginRenderPass({
+    colorAttachments: [{
+      view: shadowTarget.context.getCurrentTexture().createView(),
+      clearValue: {r: 0.05, g: 0.05, b: 0.08, a: 1},
+      loadOp: "clear", storeOp: "store"
+    }],
+    depthStencilAttachment: {
+      view: shadowTarget.depthTexture.createView(), depthClearValue: 1,
+      depthLoadOp: "clear", depthStoreOp: "store"
+    }
+  });
+  pass.setPipeline(shadedPipeline);
+  pass.setBindGroup(0, sceneBindGroup);
+  pass.setBindGroup(2, shadowBindGroup);
+  drawSceneObjects(pass);
+  pass.end();
+}
+```
+
+The light uses an orthographic camera, as a distant light should. Its direction points the way
+the light travels, from the light toward the scene:
+
+```js echo
+const lightPos = orbitEye(shadowForm.azimuth, shadowForm.elevation, 8);
+const lightDir = lightPos.map((c) => -c / Math.hypot(...lightPos));
+const lightVP = mat4.multiply(
+  transforms.ortho(-4.5, 4.5, -4.5, 4.5, 1, 16),
+  transforms.lookAt(lightPos, [0, 0, 0], [0, 1, 0])
+);
+```
+
+A frame writes the scene uniforms, which hold those matrices and the slider settings, then encodes both passes **in order**, so the depth is ready when pass 2 reads it:
+
+```js echo
+writeSceneUniforms();
+const shadowEncoder = device.createCommandEncoder();
+encodeDepthPass(shadowEncoder);
+encodeMainPass(shadowEncoder);
+device.queue.submit([shadowEncoder.finish()]);
+```
+
+```js
+function writeSceneUniforms() {
+  const camVP = mat4.multiply(
+    transforms.perspective(0.8, 1, 0.1, 40),
+    transforms.lookAt([3.2, 4.2, 6.5], [0, 0.3, 0], [0, 1, 0])
+  );
+  device.queue.writeBuffer(sceneUniforms, 0, new Float32Array(
+    [...camVP, ...lightVP, ...lightDir, 0, shadowForm.bias, shadowForm.pcf ? 1 : 0, 1 / SHADOW_SIZE, 0]
+  ));
+}
+```
+
+```js
 shadowTarget.canvas
 ```
 

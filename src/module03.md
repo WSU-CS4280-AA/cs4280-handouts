@@ -3,10 +3,11 @@ title: Module 03 — Transformations and Viewing
 toc: true
 ---
 
-```js echo
+```js
 import * as mat2 from "./components/mat2.js";
 import * as mat3 from "./components/mat3.js";
 import * as mat4 from "./lib/math/mat4.js";
+import * as vec3 from "./lib/math/vec3.js";
 import * as transforms from "./lib/math/transforms.js";
 import * as wireframe from "./components/wireframe.js";
 import {plane, drawArrow, drawPoint, drawPolygon, dragVectors, dragPoints} from "./components/vectorField.js";
@@ -29,6 +30,10 @@ extension supports the rest of the graphics pipeline:
 | **3D transformations** | 4×4 matrices, Euler angles, and gimbal lock |
 | **Viewing and projection** | The camera, perspective and orthographic projection, and the MVP pipeline |
 
+The code is part of the reading: each matrix and transform is written out here
+and checked, while the code that draws the pictures stays out of sight. Matching
+versions live in `components/mat3.js` and `lib/math/transforms.js`.
+
 Everything here is plain JavaScript, with cubes drawn as wireframes on a
 2D canvas, so no GPU is needed; Module 04 runs the same matrices in a
 WebGPU vertex shader. This handout teaches the *techniques* behind the
@@ -40,7 +45,7 @@ module; it is not a walkthrough of any graded assignment.
 
 An **affine transformation** has the form ${tex`\mathbf{p}' = A\mathbf{p} + \mathbf{t}`}, where ${tex`A`} is the linear part and ${tex`\mathbf{t}`} is a translation vector. Affine transformations preserve straight lines, parallelism, and ratios along a line.
 
-The issue is that ${tex`\mathbf{t}`} is added rather than multiplied. A linear transformation must map the origin to itself:
+The issue is that ${tex`\mathbf{t}`} is added rather than multiplied. A linear transformation must map the origin to itself, as this scaling from Module 01's toolkit shows:
 
 ```js echo
 mat2.apply(mat2.scaling(3, 3), {x: 0, y: 0})
@@ -58,9 +63,54 @@ ${tex.block`T(t_x,t_y)=\begin{bmatrix}1&0&t_x\\0&1&t_y\\0&0&1\end{bmatrix}`}
 
 multiplying a point produces ${tex`(x+t_x,y+t_y,1)`}, while multiplying a vector produces ${tex`(x,y,0)`}. In other words, translation changes locations but does not change displacements, directions, or velocities.
 
-Drag point **P** and vector **V**, then adjust the translation. The point moves; the vector does not.
+In code, a 3×3 matrix adds a third row and column to Module 01's fields:
 
 ```js echo
+const translation = (tx, ty) => ({
+  m00: 1, m01: 0, m02: tx,
+  m10: 0, m11: 1, m12: ty,
+  m20: 0, m21: 0, m22: 1
+});
+```
+
+Applying it is the same row-times-vector rule as before, with one more term in each row:
+
+```js echo
+const applyHomogeneous = (M, p) => ({
+  x: M.m00 * p.x + M.m01 * p.y + M.m02 * p.w,
+  y: M.m10 * p.x + M.m11 * p.y + M.m12 * p.w,
+  w: M.m20 * p.x + M.m21 * p.y + M.m22 * p.w
+});
+```
+
+Look at the `x` line. The translation `m02` is multiplied by `w`. That single term is the whole difference between a point and a vector, and the two functions below differ only in the `w` they supply:
+
+```js echo
+function transformPoint(M, p) {
+  const {x, y} = applyHomogeneous(M, {x: p.x, y: p.y, w: 1});
+  return {x, y};
+}
+function transformVector(M, v) {
+  const {x, y} = applyHomogeneous(M, {x: v.x, y: v.y, w: 0});
+  return {x, y};
+}
+```
+
+Test both with the same numbers. Translated by (10, 20), the point (1, 2) should become (11, 22):
+
+```js echo
+transformPoint(translation(10, 20), {x: 1, y: 2})
+```
+
+The vector (1, 2) should not change at all:
+
+```js echo
+transformVector(translation(10, 20), {x: 1, y: 2})
+```
+
+Drag point **P** and vector **V**, then adjust the translation. The point moves; the vector does not.
+
+```js
 const translateForm = view(Inputs.form({
   tx: Inputs.range([-3, 3], {value: 2, step: 0.1, label: "tx"}),
   ty: Inputs.range([-3, 3], {value: 1, step: 0.1, label: "ty"})
@@ -68,17 +118,19 @@ const translateForm = view(Inputs.form({
 ```
 
 ```js echo
-const T = mat3.translation(translateForm.tx, translateForm.ty);
+const T = translation(translateForm.tx, translateForm.ty);
 ```
 
-```js echo
+The same function calls now run on the draggable **P** and **V**:
+
+```js
 const pointInput = view(dragPoints(
   {P: {x: -2, y: -1.5}},
   {colors: ["steelblue"], domain: 4}
 ));
 ```
 
-```js echo
+```js
 const vectorInput = view(dragVectors(
   {V: {x: -2, y: -1.5}},
   {colors: ["seagreen"], domain: 4}
@@ -87,12 +139,12 @@ const vectorInput = view(dragVectors(
 
 ```js echo
 const P = pointInput.P;
-const Pprime = mat3.transformPoint(T, P);
+const Pprime = transformPoint(T, P);
 const V = vectorInput.V;
-const Vprime = mat3.transformVector(T, V);
+const Vprime = transformVector(T, V);
 ```
 
-```js echo
+```js
 (() => {
   const scene = plane({domain: 4});
   drawPoint(scene, P, {color: "steelblue", label: "P"});
@@ -119,6 +171,19 @@ ${tex.block`T(t_x,t_y)=\begin{bmatrix}1&0&t_x\\0&1&t_y\\0&0&1\end{bmatrix}\qquad
 
 Assume column vectors, as in this module. In a product ${tex`M_3M_2M_1\mathbf{p}`}, the rightmost transformation acts first. This convention is essential for reading composed transforms correctly.
 
+The new rotation has the same upper-left block as Module 01's, with the third row and column left as in the identity. `mat3.multiply` is the same row-dot-column product as before, extended to three rows and columns:
+
+```js echo
+function rotation(theta) {
+  const c = Math.cos(theta), s = Math.sin(theta);
+  return {
+    m00: c, m01: -s, m02: 0,
+    m10: s, m11: c, m12: 0,
+    m20: 0, m21: 0, m22: 1
+  };
+}
+```
+
 ### Rotate about a pivot
 
 To rotate an object about a pivot ${tex`\mathbf{p}`} that is not the origin:
@@ -131,9 +196,25 @@ Thus,
 
 ${tex.block`M = T(\mathbf{p})\,R(\theta)\,T(-\mathbf{p})`}
 
-The order shown is the matrix-product order; when applied to a column vector, ${tex`T(-\mathbf{p})`} acts first.
+The order shown is the matrix-product order; when applied to a column vector, ${tex`T(-\mathbf{p})`} acts first. The code keeps the same left-to-right order:
 
 ```js echo
+const rotateAbout = (pivot, theta) => [
+  translation(pivot.x, pivot.y),
+  rotation(theta),
+  translation(-pivot.x, -pivot.y)
+].reduce(mat3.multiply);
+```
+
+A pivot should stay where it is, because it goes to the origin, rotates in place, and comes back. So a pivot at (2, 3) should map to (2, 3), within rounding:
+
+```js echo
+transformPoint(rotateAbout({x: 2, y: 3}, 1.0), {x: 2, y: 3})
+```
+
+Below, the same matrix transforms every corner of a shape:
+
+```js
 const pivotInputWidget = dragPoints(
   {pivot: {x: 1.5, y: 0.5}},
   {colors: ["purple"], domain: 4}
@@ -141,7 +222,7 @@ const pivotInputWidget = dragPoints(
 const pivotInput = view(pivotInputWidget);
 ```
 
-```js echo
+```js
 const pivotTheta = view(Inputs.range([0, 360], {
   value: 40,
   step: 1,
@@ -151,7 +232,10 @@ const pivotTheta = view(Inputs.range([0, 360], {
 
 ```js echo
 const pivot = pivotInput.pivot;
-const Mpivot = mat3.rotateAbout(pivot, (pivotTheta * Math.PI) / 180);
+const Mpivot = rotateAbout(pivot, (pivotTheta * Math.PI) / 180);
+```
+
+```js
 const arrowShape = [
   {x: -2, y: -2.6},
   {x: -0.5, y: -2.6},
@@ -163,15 +247,17 @@ const arrowShape = [
 ];
 ```
 
-```js echo
+```js
+{
 pivotInputWidget.redecorate((scene) => {
   drawPolygon(scene, arrowShape, {stroke: "gray"});
   drawPolygon(
     scene,
-    arrowShape.map((p) => mat3.transformPoint(Mpivot, p)),
+    arrowShape.map((p) => transformPoint(Mpivot, p)),
     {stroke: "seagreen", fill: "seagreen", opacity: 0.15}
   );
 });
+}
 ```
 
 The gray arrow is the original object. The green arrow rotates around the draggable pivot, not around the plane origin. The same pattern appears when rotating a wheel about its axle or orbiting a camera around a target.
@@ -187,17 +273,14 @@ The transforms contain the same ingredients but describe different motions.
 
 ```js echo
 const orderPoint = {x: 1, y: 0};
-const rotateThenTranslate = mat3.transformPoint(
-  mat3.multiply(mat3.translation(3, 0), mat3.rotation(Math.PI / 2)),
-  orderPoint
-);
-const translateThenRotate = mat3.transformPoint(
-  mat3.multiply(mat3.rotation(Math.PI / 2), mat3.translation(3, 0)),
-  orderPoint
-);
+const quarterTurn = rotation(Math.PI / 2), shift = translation(3, 0);
+const rotateThenTranslate =
+  transformPoint(mat3.multiply(shift, quarterTurn), orderPoint);
+const translateThenRotate =
+  transformPoint(mat3.multiply(quarterTurn, shift), orderPoint);
 ```
 
-```js echo
+```js
 (() => {
   const scene = plane({domain: 5});
   drawPoint(scene, orderPoint, {color: "gray", label: "(1, 0)"});
@@ -221,6 +304,23 @@ Whenever translation and rotation are combined, ask: **which point is the rotati
 
 The same construction extends to 3D. A point becomes ${tex`(x,y,z,1)`}; a vector becomes ${tex`(x,y,z,0)`}; and affine transformations use 4×4 matrices. The module’s `lib/math/mat4.js` represents matrices as flat, column-major arrays, matching the convention typically used by graphics APIs.
 
+Column-major means the 16 numbers are stored one **column** after another, so the translation, which is the last column of the matrix, occupies the last row of the array as written here:
+
+```js echo
+const translate3D = (tx, ty, tz) => new Float32Array([
+  1, 0, 0, 0,
+  0, 1, 0, 0,
+  0, 0, 1, 0,
+  tx, ty, tz, 1
+]);
+```
+
+`mat4.transformPoint(m, [x, y, z])` supplies ${tex`w = 1`} and returns all four components. Moving (1, 2, 3) by (10, 20, 30) should give `[11, 22, 33, 1]`:
+
+```js echo
+mat4.transformPoint(translate3D(10, 20, 30), [1, 2, 3])
+```
+
 The three principal-axis rotation matrices are
 
 ${tex.block`R_x(\theta)=\begin{bmatrix}1&0&0\\0&\cos\theta&-\sin\theta\\0&\sin\theta&\cos\theta\end{bmatrix}\qquad R_y(\theta)=\begin{bmatrix}\cos\theta&0&\sin\theta\\0&1&0\\-\sin\theta&0&\cos\theta\end{bmatrix}\qquad R_z(\theta)=\begin{bmatrix}\cos\theta&-\sin\theta&0\\\sin\theta&\cos\theta&0\\0&0&1\end{bmatrix}`}
@@ -229,9 +329,19 @@ A common Euler-angle convention composes rotations as
 
 ${tex.block`R = R_z(\mathrm{yaw})\,R_y(\mathrm{pitch})\,R_x(\mathrm{roll})`}
 
-With column vectors, roll acts first, then pitch, then yaw. The cube below uses that ZYX product. The red, green, and blue lines show the cube’s local x-, y-, and z-axes after the rotation.
+With column vectors, roll acts first, then pitch, then yaw. `transforms.rotateX`, `rotateY`, and `rotateZ` build those three matrices, and `mat4.multiplyAll` multiplies a list from left to right, so the code reads just like the formula:
 
 ```js echo
+const fromEulerZYX = (yaw, pitch, roll) => mat4.multiplyAll([
+  transforms.rotateZ(yaw),
+  transforms.rotateY(pitch),
+  transforms.rotateX(roll)
+]);
+```
+
+The cube below uses that ZYX product. Its view and projection matrices are built by `lookAt` and `perspective`, which we write later in this module. The red, green, and blue lines show the cube’s local x-, y-, and z-axes after the rotation.
+
+```js
 const eulerForm = view(Inputs.form({
   yaw: Inputs.range([-180, 180], {value: 20, step: 1, label: "yaw (Z)"}),
   pitch: Inputs.range([-90, 90], {value: 30, step: 1, label: "pitch (Y)"}),
@@ -240,17 +350,17 @@ const eulerForm = view(Inputs.form({
 ```
 
 ```js echo
-const eulerModel = transforms.fromEulerZYX(
+const eulerModel = fromEulerZYX(
   (eulerForm.yaw * Math.PI) / 180,
   (eulerForm.pitch * Math.PI) / 180,
   (eulerForm.roll * Math.PI) / 180
 );
-const fixedView = transforms.lookAt([0, 0, 5], [0, 0, 0], [0, 1, 0]);
-const fixedProjection = transforms.perspective((45 * Math.PI) / 180, 1, 0.1, 20);
+const fixedView = lookAt([0, 0, 5], [0, 0, 0], [0, 1, 0]);
+const fixedProjection = perspective((45 * Math.PI) / 180, 1, 0.1, 20);
 const eulerMVP = mat4.multiplyAll([fixedProjection, fixedView, eulerModel]);
 ```
 
-```js echo
+```js
 wireframe.renderWireframe(eulerMVP, {width: 320, height: 320})
 ```
 
@@ -260,7 +370,18 @@ At a pitch of 90°, the yaw and roll axes align in this ZYX convention. The orie
 
 Quaternions avoid this coordinate singularity and are therefore commonly used for animation and orientation interpolation. The following view fixes pitch at 90° so the dependency between yaw and roll is visible.
 
+We can check the claim numerically before looking. Two different angle pairs with the same difference, yaw − roll = 40°, should give the same matrix, so the distance between them should be about 0:
+
 ```js echo
+{
+  const deg = Math.PI / 180;
+  const m1 = fromEulerZYX(40 * deg, 90 * deg, 0);
+  const m2 = fromEulerZYX(0, 90 * deg, -40 * deg);
+  display(d3.max(m1, (value, i) => Math.abs(value - m2[i])));
+}
+```
+
+```js
 const gimbalForm = view(Inputs.form({
   yaw: Inputs.range([-180, 180], {value: 0, step: 1, label: "yaw (Z)"}),
   roll: Inputs.range([-180, 180], {value: 0, step: 1, label: "roll (X)"})
@@ -268,15 +389,16 @@ const gimbalForm = view(Inputs.form({
 ```
 
 ```js echo
-const gimbalModel = transforms.fromEulerZYX(
+const gimbalModel = fromEulerZYX(
   (gimbalForm.yaw * Math.PI) / 180,
   Math.PI / 2,
   (gimbalForm.roll * Math.PI) / 180
 );
-const gimbalMVP = mat4.multiplyAll([fixedProjection, fixedView, gimbalModel]);
+const gimbalMVP =
+  mat4.multiplyAll([fixedProjection, fixedView, gimbalModel]);
 ```
 
-```js echo
+```js
 wireframe.renderWireframe(gimbalMVP, {width: 320, height: 320})
 ```
 
@@ -288,7 +410,7 @@ At this fixed pitch, the visible orientation depends on the difference ${tex`\ma
 
 A mesh vertex passes through several coordinate spaces:
 
-```js echo
+```js
 (() => {
   const items = ["Object (local)", "World", "View (camera)", "Clip", "NDC", "Screen"];
   const div = document.createElement("div");
@@ -327,7 +449,9 @@ A mesh vertex passes through several coordinate spaces:
 
 The example follows one cube corner, ${tex`(1,1,1)`}, through those stages. The camera is at the world origin and looks down the negative z-axis, so objects with negative world z are in front of the camera.
 
-```js echo
+Each stage is one matrix or one small step. `lookAt` and `perspective`, which we examine in the next two sections, build the view and projection matrices. The steps are in the order of the list above:
+
+```js
 const modelForm = view(Inputs.form({
   wx: Inputs.range([-8, 8], {value: 5, step: 0.5, label: "world x"}),
   wy: Inputs.range([-8, 8], {value: 0, step: 0.5, label: "world y"}),
@@ -337,21 +461,29 @@ const modelForm = view(Inputs.form({
 
 ```js echo
 const objectVertex = [1, 1, 1];
-const modelMatrix = transforms.translate(modelForm.wx, modelForm.wy, modelForm.wz);
-const viewMatrix = transforms.lookAt([0, 0, 0], [0, 0, -1], [0, 1, 0]);
-const projMatrix = transforms.perspective((60 * Math.PI) / 180, 1, 0.1, 50);
+const modelMatrix = translate3D(modelForm.wx, modelForm.wy, modelForm.wz);
+const viewMatrix = lookAt([0, 0, 0], [0, 0, -1], [0, 1, 0]);
+const projMatrix = perspective((60 * Math.PI) / 180, 1, 0.1, 50);
+```
+
+```js echo
 
 const worldVertex = mat4.transformPoint(modelMatrix, objectVertex);
 const viewVertex = mat4.transformPoint(viewMatrix, worldVertex);
 const clipVertex = mat4.transformPoint(projMatrix, viewVertex);
-const ndcVertex = mat4.perspectiveDivide(clipVertex);
+const ndcVertex = clipVertex.slice(0, 3).map((v) => v / clipVertex[3]);
+```
+
+The last step is the viewport transform, here for a 1920×1080 window. NDC runs from −1 to 1, so `* 0.5 + 0.5` remaps it to 0 to 1. Screen y points down, hence the `1 -`:
+
+```js echo
 const screenVertex = [
   (ndcVertex[0] * 0.5 + 0.5) * 1920,
   (1 - (ndcVertex[1] * 0.5 + 0.5)) * 1080
 ];
 ```
 
-```js echo
+```js
 (() => {
   const fmt = (p) => `(${p.map((v) => v.toFixed(2)).join(", ")})`;
   return html`<pre>object  ${fmt(objectVertex)}
@@ -367,13 +499,48 @@ Move `world z` closer to 0. As the vertex approaches the camera plane, clip-spac
 
 ### The virtual camera
 
-A graphics camera is represented by an eye position, a target point, and an up-direction hint. From these values, `lookAt` constructs an orthonormal camera basis. The **view matrix** does not physically move a camera object; instead, it transforms the whole world into coordinates relative to that camera:
+A graphics camera is represented by an eye position, a target point, and an up-direction hint. From these values, `lookAt` constructs an orthonormal camera basis, in three steps. `forward` points from the eye to the target. Crossing it with the up hint gives `right`, which is perpendicular to both. Crossing those two gives the camera's true up:
+
+```js echo
+function cameraBasis(eye, target, up) {
+  const forward = vec3.normalize(vec3.sub(target, eye));
+  const right = vec3.normalize(vec3.cross(forward, up));
+  return {forward, right, trueUp: vec3.cross(right, forward)};
+}
+```
+
+ The **view matrix** does not physically move a camera object; instead, it transforms the whole world into coordinates relative to that camera:
 
 ${tex.block`M_{\mathrm{view}} = M_{\mathrm{camera}}^{-1}`}
 
-Orbit the eye around the cube below. The cube’s model matrix remains the identity; only the view matrix changes.
+The inverse needs no general inversion routine. The camera's rotation is orthonormal, so its inverse is its transpose, which puts the basis vectors in the matrix's **rows**. The last column moves the eye to the origin. Remember that each row written below is one column of the matrix, and that a camera looks down its own ${tex`-z`}, hence `-f`:
 
 ```js echo
+function lookAt(eye, target, up) {
+  const {forward: f, right: r, trueUp: u} = cameraBasis(eye, target, up);
+  return new Float32Array([
+    r[0], u[0], -f[0], 0,
+    r[1], u[1], -f[1], 0,
+    r[2], u[2], -f[2], 0,
+    -vec3.dot(r, eye), -vec3.dot(u, eye), vec3.dot(f, eye), 1]);
+}
+```
+
+Two checks follow from what a view matrix means. The eye should land on the origin, within rounding:
+
+```js echo
+mat4.transformPoint(lookAt([3, 4, 0], [0, 0, 0], [0, 1, 0]), [3, 4, 0])
+```
+
+The target is 5 units from that eye, straight ahead along the camera's ${tex`-z`}, so it should land at `[0, 0, -5, 1]`:
+
+```js echo
+mat4.transformPoint(lookAt([3, 4, 0], [0, 0, 0], [0, 1, 0]), [0, 0, 0])
+```
+
+Orbit the eye around the cube below. The eye position comes from spherical coordinates around the origin. The cube’s model matrix remains the identity; only the view matrix changes.
+
+```js
 const orbitForm = view(Inputs.form({
   azimuth: Inputs.range([-180, 180], {value: 35, step: 1, label: "azimuth (degrees)"}),
   elevation: Inputs.range([-80, 80], {value: 20, step: 1, label: "elevation (degrees)"}),
@@ -389,12 +556,15 @@ const eye = [
   orbitForm.distance * Math.sin(el),
   orbitForm.distance * Math.cos(el) * Math.cos(az)
 ];
-const orbitView = transforms.lookAt(eye, [0, 0, 0], [0, 1, 0]);
-const orbitProjection = transforms.perspective((50 * Math.PI) / 180, 1, 0.1, 30);
-const orbitMVP = mat4.multiplyAll([orbitProjection, orbitView, mat4.identity()]);
 ```
 
 ```js echo
+const orbitView = lookAt(eye, [0, 0, 0], [0, 1, 0]);
+const orbitProjection = perspective((50 * Math.PI) / 180, 1, 0.1, 30);
+const orbitMVP = mat4.multiply(orbitProjection, orbitView);
+```
+
+```js
 wireframe.renderWireframe(orbitMVP, {width: 320, height: 320})
 ```
 
@@ -404,11 +574,45 @@ The rendered view changes even though the cube does not. The view matrix re-expr
 
 ### Projection
 
-**Orthographic projection** uses parallel projection rays. It preserves apparent size with depth: a cube twice as far away appears the same size. In homogeneous form, ${tex`w`} remains 1, so there is no meaningful perspective divide.
-
-**Perspective projection** uses rays that converge at the eye. The projected homogeneous ${tex`w`} is proportional to view-space depth, so dividing by ${tex`w`} makes more distant geometry appear smaller.
+**Orthographic projection** uses parallel projection rays. It preserves apparent size with depth: a cube twice as far away appears the same size. In homogeneous form, ${tex`w`} remains 1, so there is no meaningful perspective divide. The matrix just scales and shifts a box of the given bounds into the NDC range, with depth mapped to WebGPU's ${tex`[0, 1]`}:
 
 ```js echo
+function ortho(l, r, b, t, n, f) {
+  const k = 1 / (n - f);
+  return new Float32Array([
+    2 / (r - l), 0, 0, 0,
+    0, 2 / (t - b), 0, 0,
+    0, 0, k, 0,
+    -(r + l) / (r - l), -(t + b) / (t - b), n * k, 1]);
+}
+```
+
+**Perspective projection** uses rays that converge at the eye. The projected homogeneous ${tex`w`} is proportional to view-space depth, so dividing by ${tex`w`} makes more distant geometry appear smaller. Look for that in the code. Written here as columns, the `-1` is in the third column's last entry, so it copies ${tex`-z`} into ${tex`w`}. `f` scales ${tex`x`} and ${tex`y`} according to the field of view, and `k` maps depth to ${tex`[0, 1]`}:
+
+```js echo
+function perspective(fovY, aspect, near, far) {
+  const f = 1 / Math.tan(fovY / 2), k = 1 / (near - far);
+  return new Float32Array([
+    f / aspect, 0, 0, 0,
+    0, f, 0, 0,
+    0, 0, far * k, -1,
+    0, 0, near * far * k, 0]);
+}
+```
+
+A point 4 units in front of the camera has ${tex`z = -4`}, so its ${tex`w`} should be 4:
+
+```js echo
+mat4.transformPoint(perspective(Math.PI / 2, 1, 0.1, 50), [1, 1, -4])
+```
+
+Under orthographic projection, the same point keeps ${tex`w = 1`}:
+
+```js echo
+mat4.transformPoint(ortho(-2, 2, -2, 2, 0.1, 50), [1, 1, -4])
+```
+
+```js
 const projForm = view(Inputs.form({
   fov: Inputs.range([20, 100], {value: 50, step: 1, label: "perspective FOV (degrees)"}),
   orthoExtent: Inputs.range([1, 5], {value: 2.5, step: 0.1, label: "orthographic half-extent"})
@@ -417,21 +621,16 @@ const projForm = view(Inputs.form({
 
 ```js echo
 const compareEye = [3, 2, 5];
-const compareView = transforms.lookAt(compareEye, [0, 0, 0], [0, 1, 0]);
-const perspProjection = transforms.perspective((projForm.fov * Math.PI) / 180, 1, 0.1, 30);
-const orthoProjection = transforms.ortho(
-  -projForm.orthoExtent,
-  projForm.orthoExtent,
-  -projForm.orthoExtent,
-  projForm.orthoExtent,
-  0.1,
-  30
-);
-const perspMVP = mat4.multiplyAll([perspProjection, compareView, mat4.identity()]);
-const orthoMVP = mat4.multiplyAll([orthoProjection, compareView, mat4.identity()]);
+const compareView = lookAt(compareEye, [0, 0, 0], [0, 1, 0]);
+const fovRadians = (projForm.fov * Math.PI) / 180;
+const perspProjection = perspective(fovRadians, 1, 0.1, 30);
+const e = projForm.orthoExtent;
+const orthoProjection = ortho(-e, e, -e, e, 0.1, 30);
+const perspMVP = mat4.multiply(perspProjection, compareView);
+const orthoMVP = mat4.multiply(orthoProjection, compareView);
 ```
 
-```js echo
+```js
 (() => {
   const div = document.createElement("div");
   div.style.display = "flex";

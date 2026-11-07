@@ -3,7 +3,7 @@ title: Module 11 — Sampling
 toc: true
 ---
 
-```js echo
+```js
 import * as d3 from "npm:d3";
 import {initializeWebGPU} from "./lib/webgpu.js";
 import * as Inputs from "npm:@observablehq/inputs";
@@ -19,6 +19,9 @@ fair random lines, and runs them in WebGPU shaders. The WebGPU section
 needs **Chrome or Edge 113+**. This handout teaches the *techniques*; it
 is not a walkthrough of any graded assignment.
 
+The code is part of the reading: each idea is built in small steps, most of
+them checked by running them, and only plotting and setup code stays out of sight.
+
 ## Why Sampling?
 
 Graphics keeps needing fair random choices in unusual spaces: points in a
@@ -28,11 +31,22 @@ region. The same machinery **estimates integrals** that have no closed
 form, which is **Monte Carlo integration**, the basis of realistic
 rendering.
 
-Small helpers used throughout:
+Everything in this module starts from one primitive, the **canonical random
+number** ${tex`\xi`} (the Greek letter *xi*), a value uniform on
+${tex`[0, 1)`}. JavaScript already provides it, so we simply give it the
+name the math uses:
 
 ```js echo
-const xi = Math.random;                                  // canonical random number ξ in [0, 1)
-const mean = (a) => d3.mean(a), variance = (a) => d3.variance(a);
+const xi = Math.random;   // canonical random number ξ in [0, 1)
+```
+
+Two D3 calls appear often. `d3.range(n)` builds the array
+`[0, 1, ..., n - 1]`, so `d3.range(n).map(() => xi())` is "draw ${tex`n`}
+samples". And `d3.mean(items, f)` averages `f(item)` over the items.
+
+```js
+const mean = (a) => d3.mean(a);
+const variance = (a) => d3.variance(a);
 function caption(label, node) {
   const wrap = document.createElement("div");
   wrap.innerHTML = `<div style="font:12px var(--sans-serif); opacity:.65; margin-bottom:4px">${label}</div>`;
@@ -76,6 +90,10 @@ by a nonnegative function creates a new measure:
 
 ${tex.block`\nu(S) = \int_{\mathbf x \in S} \lVert\mathbf x\rVert^2\, dA(\mathbf x)`}
 
+Here ${tex`\nu`} counts area far from the origin more heavily than area near
+it. Keep this idea in mind: a sampler that favors some regions is, in effect,
+using a weighted measure like this one.
+
 ### Averages depend on the measure
 
 The **average** of ${tex`f`} over ${tex`S`} with respect to ${tex`\mu`} is
@@ -84,36 +102,62 @@ ${tex.block`\text{average}(f) = \frac{\int_S f\, d\mu}{\int_S d\mu}`}
 
 The reading's example: ${tex`f(x,y) = x^2`} over ${tex`[0,2]^2`} with the
 area measure has average ${tex`4/3`}. Choosing points **uniformly by
-area** estimates it. Choosing them uniformly in some other coordinates
-quietly changes the measure. Here the same square is also covered by
-picking a random radius and angle from its center, which crowds points
-toward the center:
+area** estimates it. To get such a point, choose each coordinate
+independently and uniformly on ${tex`[0, 2]`}:
 
 ```js echo
+function sampleByArea() {
+  return {x: 2 * xi(), y: 2 * xi()};
+}
+```
+
+Choosing points uniformly in some other coordinates quietly changes the
+measure. To see this, cover the same square by picking a random radius and
+angle from its center. A radius of up to ${tex`\sqrt 2`} reaches the
+corners, and the loop tries again whenever a point lands outside the square:
+
+```js echo
+function sampleByPolar() {
+  while (true) {
+    const r = Math.SQRT2 * xi(), phi = 2 * Math.PI * xi();
+    const p = {x: 1 + r * Math.cos(phi), y: 1 + r * Math.sin(phi)};
+    if (p.x >= 0 && p.x <= 2 && p.y >= 0 && p.y <= 2) return p;
+  }
+}
+```
+
+Every radius is equally likely here, yet a ring near the center has far
+less area than a ring near the edge. The same number of points shares a
+smaller space, so points crowd toward the center. Both samplers feed the
+same estimate, the sample average of ${tex`x^2`}:
+
+```js echo
+const averageXSquared = (points) => d3.mean(points, (p) => p.x * p.x);
+```
+
+```js
 const avgN = view(Inputs.range([100, 20000], {value: 2000, step: 100, label: "points"}));
 ```
 
-```js echo
+```js
 (() => {
-  const byArea = d3.range(avgN).map(() => ({x: 2 * xi(), y: 2 * xi()}));
-  const byPolar = [];
-  while (byPolar.length < avgN) {                      // uniform (r, φ) about (1, 1), kept if inside the square
-    const r = Math.SQRT2 * xi(), phi = 2 * Math.PI * xi();
-    const p = {x: 1 + r * Math.cos(phi), y: 1 + r * Math.sin(phi)};
-    if (p.x >= 0 && p.x <= 2 && p.y >= 0 && p.y <= 2) byPolar.push(p);
-  }
-  const avg = (pts) => mean(pts.map((p) => p.x * p.x)).toFixed(4);
+  const byArea = d3.range(avgN).map(sampleByArea);
+  const byPolar = d3.range(avgN).map(sampleByPolar);
   return row(
-    caption(`uniform in area: average x² ≈ ${avg(byArea)}`, squarePlot(byArea.slice(0, 1500), {domain: [0, 2], r: 1.3})),
-    caption(`uniform in (r, φ): average x² ≈ ${avg(byPolar)}`, squarePlot(byPolar.slice(0, 1500), {domain: [0, 2], r: 1.3, fill: "orangered"})),
+    caption(`uniform in area: average x² ≈ ${averageXSquared(byArea).toFixed(4)}`, squarePlot(byArea.slice(0, 1500), {domain: [0, 2], r: 1.3})),
+    caption(`uniform in (r, φ): average x² ≈ ${averageXSquared(byPolar).toFixed(4)}`, squarePlot(byPolar.slice(0, 1500), {domain: [0, 2], r: 1.3, fill: "orangered"})),
     html`<pre style="align-self:center">exact (area measure): ${(4 / 3).toFixed(4)}</pre>`
   );
 })()
 ```
 
-The second average is an honest average, but with respect to a
-different measure (one that weights the center more). Most sampling
-bugs are an unintended change of measure.
+Raise the point count and the two estimates settle on **different** values:
+about 1.33 for area and about 1.22 for polar. No amount of extra sampling
+closes that gap. The second average is an honest average, but with respect
+to a different measure. Since ${tex`dA = r\,dr\,d\phi`}, points uniform in
+${tex`(r, \phi)`} have a density per unit area proportional to ${tex`1/r`}, so
+this sampler computes an average weighted by ${tex`1/r`}, which favors the
+center. Most sampling bugs are an unintended change of measure.
 
 The hard part of many problems is choosing the **natural** measure. For
 points in the plane it is area. For a set of **lines**, it is not obvious;
@@ -131,9 +175,8 @@ ${tex.block`\text{Probability}(x \in [a, b]) = \int_a^b p(x)\, dx, \qquad p(x) \
 
 The value ${tex`p(x)`} is a **relative** likelihood, not a probability: it
 can exceed 1. If ${tex`p(x_1) = 6`} and ${tex`p(x_2) = 3`}, values near
-${tex`x_1`} are twice as likely as values near ${tex`x_2`}. The **canonical
-random number** ${tex`\xi`} is uniform on ${tex`[0, 1)`}, so
-${tex`p(\xi) = 1`} there. It is what `Math.random()` returns.
+${tex`x_1`} are twice as likely as values near ${tex`x_2`}. The canonical
+random number has ${tex`p(\xi) = 1`} on ${tex`[0, 1)`}.
 
 ### Expected value and variance
 
@@ -146,18 +189,31 @@ easier to compute. Scaling gives ${tex`V(cx) = c^2V(x)`}, and the
 **standard deviation** ${tex`\sigma = \sqrt V`} is the typical size of the
 deviation from the mean. Expectation is **linear even for correlated
 variables**, a fact most of Monte Carlo rests on, while variances add only
-for **uncorrelated** ones (independent variables, for example). Check both
-with ${tex`x = \xi`} and a second variable that is either independent or
-${tex`y = \xi^2`} of the same ${tex`\xi`}:
+for **uncorrelated** ones (independent variables, for example).
+
+We can test both claims. The function below draws ${tex`N`} pairs with
+${tex`x = \xi`}. The only difference between the two cases is where
+${tex`y`} comes from: squaring the **same** ${tex`\xi`} ties ${tex`y`} to
+${tex`x`}, while squaring a **fresh** ${tex`\xi'`} leaves them independent.
 
 ```js echo
+function drawPairs(N, correlated) {
+  const xs = d3.range(N).map(() => xi());
+  const ys = xs.map((a) => (correlated ? a * a : xi() ** 2));
+  return {xs, ys};
+}
+```
+
+The output compares each sum of statistics with the statistic of the sum,
+computed from `xs[i] + ys[i]`, using 200,000 pairs:
+
+```js
 const corrMode = view(Inputs.radio(["independent: y = ξ′²", "correlated: y = ξ²"], {value: "correlated: y = ξ²", label: "y"}));
 ```
 
-```js echo
+```js
 (() => {
-  const N = 200000, xs = [], ys = [];
-  for (let i = 0; i < N; i++) { const a = xi(); xs.push(a); ys.push(corrMode.startsWith("ind") ? xi() ** 2 : a * a); }
+  const {xs, ys} = drawPairs(200000, corrMode.startsWith("corr"));
   const sum = xs.map((v, i) => v + ys[i]);
   const f = (v) => v.toFixed(4);
   return html`<pre>E(x) = ${f(mean(xs))}   E(y) = ${f(mean(ys))}   E(x) + E(y) = ${f(mean(xs) + mean(ys))}   E(x + y) = ${f(mean(sum))}   (exact 1/2 + 1/3 = 0.8333)
@@ -165,8 +221,10 @@ V(x) = ${f(variance(xs))}   V(y) = ${f(variance(ys))}   V(x) + V(y) = ${f(varian
 })()
 ```
 
-The expectations always add. With the correlated ${tex`y`}, the variance
-of the sum is much **larger** than the sum of variances.
+The expectations always add. With the correlated ${tex`y`}, the variance of
+the sum is much **larger** than the sum of variances: about 0.339 instead
+of 0.172. Large ${tex`x`} always comes with large ${tex`y`}, so the two
+swing together and widen the spread of ${tex`x + y`}.
 
 ### Multidimensional random variables
 
@@ -190,19 +248,36 @@ not mean uniform in each coordinate. The disk demo below measures this
 
 For independent, identically distributed (iid) samples,
 ${tex`\frac1N\sum x_i \to E(x)`}, and the variance of the
-average is ${tex`V(x)/N`}. Below, 40 independent averages of
-${tex`\xi^2`} (exact mean ${tex`1/3`}) at the chosen ${tex`N`}, with the
-band ${tex`\pm 2\sigma/\sqrt N`}:
+average is ${tex`V(x)/N`}. Let's watch this happen for ${tex`\xi^2`}, whose
+exact mean is ${tex`1/3`}. One estimate is the average of ${tex`N`} samples:
 
 ```js echo
+function estimateMeanOfXiSquared(N) {
+  return d3.mean(d3.range(N), () => xi() ** 2);
+}
+```
+
+The theory also predicts how far such an estimate should stray. Its
+standard deviation is ${tex`\sigma/\sqrt N`}, where ${tex`\sigma`} comes
+from the variance formula above:
+
+```js echo
+// V(ξ²) = E(ξ⁴) − E(ξ²)² = 1/5 − 1/9
+const sigmaXiSquared = Math.sqrt(1 / 5 - 1 / 9);
+```
+
+The plot runs 40 independent estimates at the chosen ${tex`N`} and shades
+the band ${tex`\pm 2\sigma/\sqrt N`} around the exact mean. The vertical
+position of each dot has no meaning; it only keeps the dots from overlapping.
+
+```js
 const meanN = view(Inputs.range([2, 2000], {value: 20, step: 1, label: "N (samples per average)"}));
 ```
 
-```js echo
+```js
 (() => {
-  const sigma = Math.sqrt(1 / 5 - 1 / 9);                  // V(ξ²) = E(ξ⁴) − E(ξ²)² = 1/5 − 1/9
-  const trials = d3.range(40).map((k) => ({k, est: d3.mean(d3.range(meanN), () => xi() ** 2)}));
-  const band = 2 * sigma / Math.sqrt(meanN);
+  const trials = d3.range(40).map((k) => ({k, est: estimateMeanOfXiSquared(meanN)}));
+  const band = 2 * sigmaXiSquared / Math.sqrt(meanN);
   return Plot.plot({height: 120, x: {domain: [0, 1], label: "estimate of E(ξ²)"}, y: {axis: null, domain: [-1, 1]},
     marks: [
       Plot.rectX([0], {x1: 1 / 3 - band, x2: 1 / 3 + band, y1: -1, y2: 1, fill: "orange", fillOpacity: 0.15}),
@@ -220,8 +295,13 @@ certainty.
 
 ### The estimator and its error
 
-Since ${tex`E(g(x)/p(x)) = \int g\,d\mu`}, a sample average estimates the
-integral:
+The key step is to apply the definition of expected value to the ratio
+${tex`g/p`}. The density in the definition cancels the one in the ratio:
+
+${tex.block`E\left(\frac{g(\mathbf x)}{p(\mathbf x)}\right) = \int_S \frac{g(\mathbf x)}{p(\mathbf x)}\, p(\mathbf x)\, d\mu = \int_S g\, d\mu`}
+
+So the integral we want is the expected value of ${tex`g/p`}, and a sample
+average estimates an expected value:
 
 ${tex.block`\int_S g\, d\mu \approx \frac1N\sum_{i=1}^N \frac{g(\mathbf x_i)}{p(\mathbf x_i)}, \qquad \mathbf x_i \sim p`}
 
@@ -231,36 +311,95 @@ ${tex`d`} dimensions, while Monte Carlo's error ${tex`\sigma/\sqrt N`} has
 no ${tex`d`} in it. The density ${tex`p`} must be **positive wherever
 ${tex`g`} is nonzero**.
 
-The reading's running example is ${tex`\int_0^4 x\,dx = 8`}. Each
-density below is sampled by inverting its CDF:
+The reading's running example is ${tex`\int_0^4 x\,dx = 8`}. A sampling
+method needs two things: a way to **draw** ${tex`x \sim p`} and the **value**
+${tex`p(x)`} used for the division. We describe four methods this way, each
+drawing its samples by inverting a CDF (explained in
+[Function inversion](#function-inversion-in-1d)). For example,
+${tex`p = x/8`} has ${tex`P(x) = x^2/16`}, and solving ${tex`\xi = P(x)`}
+gives ${tex`x = 4\sqrt\xi`}.
 
 ```js echo
-const mcMethods = [
-  {name: "uniform  p = 1/4", sample: () => 4 * xi(), pdf: () => 1 / 4},
-  {name: "importance  p = (6 − x)/16", sample: () => 6 - Math.sqrt(36 - 32 * xi()), pdf: (x) => (6 - x) / 16},
-  {name: "importance  p = (x + 2)/16", sample: () => -2 + Math.sqrt(4 + 32 * xi()), pdf: (x) => (x + 2) / 16},
-  {name: "importance  p = x/8", sample: () => 4 * Math.sqrt(xi()), pdf: (x) => x / 8}
+const uniformMethod = {
+  name: "uniform  p = 1/4", sample: () => 4 * xi(), pdf: () => 1 / 4
+};
+```
+
+The other three are importance densities, which we return to shortly:
+
+```js echo
+const importanceMethods = [
+  {name: "importance  p = (6 − x)/16",
+   sample: () => 6 - Math.sqrt(36 - 32 * xi()), pdf: (x) => (6 - x) / 16},
+  {name: "importance  p = (x + 2)/16",
+   sample: () => -2 + Math.sqrt(4 + 32 * xi()), pdf: (x) => (x + 2) / 16},
+  {name: "importance  p = x/8",
+   sample: () => 4 * Math.sqrt(xi()), pdf: (x) => x / 8}
 ];
-function mcEstimate(method, N) {
-  let s = 0;
-  for (let i = 0; i < N; i++) { const x = method.sample(); s += x / method.pdf(x); }
-  return s / N;
-}
-function stratifiedEstimate(N) {                        // one uniform sample in each of N equal strata
-  let s = 0;
-  for (let i = 0; i < N; i++) s += 4 * (i + xi()) / N;
-  return (4 / N) * s;
-}
 ```
 
 ```js echo
+const mcMethods = [uniformMethod, ...importanceMethods];
+```
+
+The estimator is the formula above turned into a loop. Here
+${tex`g(x) = x`}, so each term is `x / method.pdf(x)`:
+
+```js echo
+function mcEstimate(method, N) {
+  let sum = 0;
+  for (let i = 0; i < N; i++) {
+    const x = method.sample();
+    sum += x / method.pdf(x);
+  }
+  return sum / N;
+}
+```
+
+Try each method with 1,000 samples. All should land near 8. The last is
+**exactly** 8, because ${tex`x / (x/8) = 8`} for every sample:
+
+```js echo
+mcMethods.map((method) => mcEstimate(method, 1000))
+```
+
+To compare the methods fairly, we need their typical error, not one lucky
+run. The **root mean square (RMS) error** repeats an estimator and summarizes
+how far it lands from the exact answer:
+
+```js echo
+function rmsError(estimate, exact, trials = 300) {
+  const errors = d3.range(trials).map(() => estimate() - exact);
+  return Math.sqrt(d3.mean(errors, (e) => e * e));
+}
+```
+
+We add one more contender, previewing
+[stratified sampling](#stratified-sampling). Instead of ${tex`N`}
+independent samples, it takes one sample in each of ${tex`N`} equal slices
+of ${tex`[0, 4]`}. Slice ${tex`i`} contains `x = 4 * (i + xi()) / N`, and
+because each slice has width ${tex`4/N`}, the sum of the ${tex`x`} values is
+scaled by that width:
+
+```js echo
+function stratifiedEstimate(N) {
+  let sum = 0;
+  for (let i = 0; i < N; i++) sum += 4 * (i + xi()) / N;
+  return (4 / N) * sum;
+}
+```
+
+The plot measures the RMS error of each method as ${tex`N`} grows, on
+log–log axes, where a power law becomes a straight line:
+
+```js
 (() => {
   const Ns = [4, 8, 16, 32, 64, 128, 256, 512, 1024];
-  const methods = [...mcMethods.slice(0, 3), {name: "stratified  p = 1/4", estimate: stratifiedEstimate}];
-  const rows = methods.flatMap((m) => Ns.map((N) => {
-    const est = d3.range(300).map(() => (m.estimate ? m.estimate(N) : mcEstimate(m, N)));
-    return {method: m.name, N, rms: Math.sqrt(d3.mean(est, (e) => (e - 8) ** 2))};
-  }));
+  const methods = [
+    ...mcMethods.slice(0, 3).map((m) => ({name: m.name, estimate: (N) => mcEstimate(m, N)})),
+    {name: "stratified  p = 1/4", estimate: stratifiedEstimate}
+  ];
+  const rows = methods.flatMap((m) => Ns.map((N) => ({method: m.name, N, rms: rmsError(() => m.estimate(N), 8)})));
   return Plot.plot({height: 280, width: 560, x: {type: "log", label: "N"}, y: {type: "log", label: "RMS error"}, color: {legend: true},
     marks: [Plot.line(rows, {x: "N", y: "rms", stroke: "method", marker: "dot"}), Plot.gridY({strokeOpacity: 0.1})]});
 })()
@@ -270,8 +409,7 @@ The three plain Monte Carlo lines have slope ${tex`-\tfrac12`}: halving
 the error costs four times the samples. Their **heights** differ with the
 variance of ${tex`g/p`}. Stratification changes the **slope** to
 ${tex`-\tfrac32`} for this smooth integrand. The ${tex`p = x/8`} line is
-missing because its error is exactly zero: ${tex`g/p = 8`} for every
-sample.
+missing because its error is exactly zero, which a log axis cannot show.
 
 ### Importance sampling
 
@@ -281,24 +419,54 @@ ${tex`x/8`}; this needs ${tex`g \ge 0`}), the variance is **zero**, but
 that requires knowing ${tex`I`}, the value being computed. A bad match is
 worse than uniform: the
 ${tex`(6-x)/16`} density above puts most samples where ${tex`g`} is
-small. The effect is dramatic for a peaked integrand such as a bright
-light or a glossy lobe. Here ${tex`g(x) = e^{-50(x - 0.5)^2}`} is sampled
-uniformly and with a tent density centered on the peak:
+small.
+
+The effect is dramatic for a peaked integrand such as a bright light or a
+glossy lobe. Take a narrow bump at ${tex`x = 0.5`}. Its integral over
+${tex`[0, 1]`} is known, which lets us check the estimates:
 
 ```js echo
 const peaked = (x) => Math.exp(-50 * (x - 0.5) ** 2);
+// The factor is erf(√50 / 2) ≈ 0.9999994.
+const peakedExact = Math.sqrt(Math.PI / 50) * 0.9999994267;
+```
+
+A rough match is enough to help. A **tent** density rises to a peak at the
+same place. Its pdf integrates to 1, and inverting each half of its CDF
+(${tex`2x^2`} on the left, ${tex`1 - 2(1-x)^2`} on the right) gives the
+sampler:
+
+```js echo
 const tentPdf = (x) => (x < 0.5 ? 4 * x : 4 * (1 - x));
-const sampleTent = () => { const u = xi(); return u < 0.5 ? Math.sqrt(u / 2) : 1 - Math.sqrt((1 - u) / 2); };
-const peakedExact = Math.sqrt(Math.PI / 50) * 0.9999994267;   // erf(√50 / 2) ≈ 0.9999994
+const sampleTent = () => {
+  const u = xi();
+  return u < 0.5 ? Math.sqrt(u / 2) : 1 - Math.sqrt((1 - u) / 2);
+};
+```
+
+Both approaches now share one estimator. Uniform sampling is the special
+case `sampleFrom = xi` with a pdf of 1:
+
+```js echo
+function estimatePeaked(sampleFrom, pdf, N) {
+  return d3.mean(d3.range(N), () => {
+    const x = sampleFrom();
+    return peaked(x) / pdf(x);
+  });
+}
+```
+
+Each dot below is one complete estimate, 60 per method:
+
+```js
 const isN = view(Inputs.range([2, 200], {value: 16, step: 1, label: "N per estimate"}));
 ```
 
-```js echo
+```js
 (() => {
-  const est = (draw, pdf) => d3.mean(d3.range(isN), () => { const x = draw(); return peaked(x) / pdf(x); });
   const data = [
-    ...d3.range(60).map((k) => ({k, method: "uniform", value: est(xi, () => 1)})),
-    ...d3.range(60).map((k) => ({k, method: "tent (importance)", value: est(sampleTent, tentPdf)}))
+    ...d3.range(60).map((k) => ({k, method: "uniform", value: estimatePeaked(xi, () => 1, isN)})),
+    ...d3.range(60).map((k) => ({k, method: "tent (importance)", value: estimatePeaked(sampleTent, tentPdf, isN)}))
   ];
   const rowOf = {"uniform": 1, "tent (importance)": 0};
   return Plot.plot({height: 170, marginLeft: 110, x: {label: "estimate", domain: [0, 2 * peakedExact]},
@@ -323,20 +491,42 @@ the independent terms add:
 
 ${tex.block`I \approx \sum_{i=1}^N \frac{g(\mathbf x_i)}{p_i(\mathbf x_i)}, \qquad V = \sum_{i=1}^N V\left(\frac{g(\mathbf x_i)}{p_i(\mathbf x_i)}\right)`}
 
-The variance is **never higher** than without stratification, and
-**jittering** a pixel (one random point in each cell of a grid) is
-stratified sampling. There is no general rate. The ${tex`21.3/N^3`} of the
-running example comes from its smooth integrand; stratification helps most
-when ${tex`g`} is smooth inside each stratum, and does not help at all for
-white noise.
+`stratifiedEstimate` above is this formula for the running example. There,
+${tex`p_i = N/4`} on each slice, so each term is ${tex`x_i \cdot 4/N`}, the
+scaling you saw in the code.
+
+The variance is **never higher** than without stratification, but there is no
+general rate of improvement. The ${tex`21.3/N^3`} of the running example comes
+from its smooth integrand; stratification helps most when ${tex`g`} is smooth
+inside each stratum, and does not help at all for white noise.
+
+**Jittering** a pixel (one random point in each cell of a grid) is
+stratified sampling. In two dimensions, the strata are the cells of a
+`side` × `side` grid. Index `k` picks a cell, and the random part chooses a
+position inside it:
+
+```js echo
+function jitteredGrid(side) {
+  return d3.range(side * side).map((k) => ({
+    x: (k % side + xi()) / side,               // column + random offset
+    y: (Math.floor(k / side) + xi()) / side    // row + random offset
+  }));
+}
+```
+
+We use this grid again for the point patterns and disk warps below.
 
 ### Monte Carlo results for the running example
 
-The measured variances match the reading's table. The last column is the
-sample count needed for a standard error of 0.008 (0.1% of 8), computed
-from the table's rounded variances:
+Let's check the reading's variance table directly. Each row runs its
+estimator 4,000 times at ${tex`N = 1000`} and takes the variance of the
+results. For easy comparison, the measured variance is multiplied by
+${tex`N`} (or ${tex`N^3`} for stratified), which should reproduce the
+number in the theory column. The last column is the sample count needed for
+a standard error of 0.008 (0.1% of 8), computed from the table's rounded
+variances:
 
-```js echo
+```js
 (() => {
   const N = 1000, m = (name) => mcMethods.find((d) => d.name.includes(name));
   const rows = [
@@ -352,8 +542,8 @@ from the table's rounded variances:
 })()
 ```
 
-Stratified sampling is often far better than importance sampling, and the
-two can be combined.
+The measured values match the table. Stratified sampling is often far
+better than importance sampling, and the two can be combined.
 
 ### Quasi–Monte Carlo
 
@@ -361,47 +551,81 @@ Replace random points with **quasi-random** points: deterministic, but
 evenly spread, so that the number of points in any region ${tex`R`} of the
 unit square is about ${tex`|R|\,N`}. The **radical inverse**
 ${tex`\Phi_b(k)`} mirrors the base-${tex`b`} digits of ${tex`k`} about the
-radix point, for example ${tex`6 = 110_2 \mapsto 0.011_2 = 0.375`}. The
-**Halton sequence** makes point ${tex`k`} equal to
+radix point, for example ${tex`6 = 110_2 \mapsto 0.011_2 = 0.375`}.
+
+The code reads the digits of `k` from the lowest up. The lowest digit
+becomes the first digit after the point, which is worth ${tex`1/b`}, and each
+later digit is worth ${tex`b`} times less:
+
+```js echo
+function radicalInverse(k, base) {
+  let result = 0;
+  for (let placeValue = 1 / base; k > 0; placeValue /= base) {
+    result += placeValue * (k % base);   // k % base is the lowest digit
+    k = Math.floor(k / base);            // drop that digit
+  }
+  return result;
+}
+```
+
+Trace `radicalInverse(6, 2)`. The digits of 6, lowest first, are 0, 1, 1,
+worth 0.5, 0.25, and 0.125, so the result is
+${tex`0 + 0.25 + 0.125`}:
+
+```js echo
+radicalInverse(6, 2)
+```
+
+Because the lowest digit changes on every step, consecutive values jump
+across the interval rather than crawl along it: base 2 starts 0.5, 0.25,
+0.75, 0.125, each new point falling into a gap left by the earlier ones.
+
+The **Halton sequence** makes point ${tex`k`} equal to
 ${tex`(\Phi_2(k), \Phi_3(k), \dots)`}, with one prime base per dimension.
 The **Hammersley set** is ${tex`(k/N, \Phi_2(k))`}, which needs ${tex`N`}
 in advance.
 
 ```js echo
-function radicalInverse(k, base) {
-  let result = 0, f = 1 / base;
-  for (let n = k; n > 0; n = Math.floor(n / base), f /= base) result += f * (n % base);
-  return result;
-}
 const halton = (k) => ({x: radicalInverse(k, 2), y: radicalInverse(k, 3)});
 const hammersley = (k, N) => ({x: k / N, y: radicalInverse(k, 2)});
+```
+
+How do we measure "evenly spread"? For a box ${tex`[0, a) \times [0, b)`},
+the fraction of points inside should equal the box's area
+${tex`ab`}. This function tries 400 scattered boxes and reports the worst
+mismatch:
+
+```js echo
+function worstBoxError(points) {
+  return d3.max(d3.range(400), (k) => {
+    const a = (k * 0.6180339887) % 1, b = (k * 0.7548776662) % 1;
+    const inBox = points.filter((p) => p.x < a && p.y < b).length;
+    return Math.abs(inBox / points.length - a * b);
+  });
+}
+```
+
+```js
 const patternN = view(Inputs.range([16, 256], {value: 64, step: 1, label: "N (rounded to a square for grids)"}));
 ```
 
-```js echo
+```js
 (() => {
   const side = Math.max(2, Math.round(Math.sqrt(patternN))), n = side * side;
-  const grid = (f) => d3.range(side * side).map((k) => ({x: (k % side + f()) / side, y: (Math.floor(k / side) + f()) / side}));
   const sets = [
     ["random", d3.range(n).map(() => ({x: xi(), y: xi()}))],
-    ["jittered", grid(xi)],
-    ["regular", grid(() => 0.5)],
+    ["jittered", jitteredGrid(side)],
+    ["regular", d3.range(n).map((k) => ({x: (k % side + 0.5) / side, y: (Math.floor(k / side) + 0.5) / side}))],
     ["Halton (2, 3)", d3.range(1, n + 1).map(halton)],
     ["Hammersley", d3.range(n).map((k) => hammersley(k, n))]
   ];
-  // Discrepancy check: the worst error of "points in a box ≈ area × N" over many random boxes
-  const discrepancy = (pts) => d3.max(d3.range(400), (k) => {
-    const a = (k * 0.6180339887) % 1, b = (k * 0.7548776662) % 1;
-    return Math.abs(pts.filter((p) => p.x < a && p.y < b).length / pts.length - a * b);
-  });
-  return row(...sets.map(([label, pts]) => caption(`${label}: worst box error ${discrepancy(pts).toFixed(3)}`, squarePlot(pts, {size: 160, domain: [0, 1], r: 2}))));
+  return row(...sets.map(([label, pts]) => caption(`${label}: worst box error ${worstBoxError(pts).toFixed(3)}`, squarePlot(pts, {size: 160, domain: [0, 1], r: 2}))));
 })()
 ```
 
-"Worst box error" measures how far the count in an axis-aligned box
-strays from (area × N). Random points do worst. The others spread evenly,
-but the regular grid's structure can **alias** (Module 06). Quasi-random points can
-replace random ones **anywhere** a random point in ${tex`[0,1]^d`} is used.
+Random points typically do worst. The others spread evenly, but the regular grid's
+structure can **alias** (Module 06). Quasi-random points can replace random
+ones **anywhere** a random point in ${tex`[0,1]^d`} is used.
 
 ## Choosing Random Points
 
@@ -423,18 +647,36 @@ because
 ${tex.block`\text{Probability}\big(P^{-1}(\xi) < x\big) = \text{Probability}\big(\xi < P(x)\big) = P(x)`}
 
 For ${tex`p(x) = \tfrac32x^2`} on ${tex`[-1,1]`},
-${tex`P(x) = (x^3 + 1)/2`}, so ${tex`x = \sqrt[3]{2\xi - 1}`}:
+${tex`P(x) = (x^3 + 1)/2`}, so ${tex`x = \sqrt[3]{2\xi - 1}`}. The entire
+sampler is one line:
 
 ```js echo
+const warpCubic = (u) => Math.cbrt(2 * u - 1);
+```
+
+Feed it evenly spaced values of ${tex`\xi`} to see what it does:
+
+```js echo
+[0, 0.25, 0.5, 0.75, 1].map(warpCubic)
+```
+
+The middle half of the ${tex`\xi`} values reaches ±0.79, so the other half
+lands in the small stretches beyond it. That is the density we asked for:
+${tex`p`} is largest near ±1 and zero at the center.
+
+In the demo, the left plot connects stratified ${tex`\xi`} values,
+`(i + xi()) / n`, to their warped positions. The right plot compares a
+histogram of 40,000 warped samples with ${tex`p`}.
+
+```js
 const invN = view(Inputs.range([10, 40], {value: 16, step: 1, label: "jittered ξ values"}));
 ```
 
-```js echo
+```js
 (() => {
-  const warp = (u) => Math.cbrt(2 * u - 1);
   const xis = d3.range(invN).map((i) => (i + xi()) / invN);       // stratified ξ
-  const links = xis.map((u) => ({x1: 2 * u - 1, x2: warp(u)}));
-  const many = d3.range(40000).map(() => warp(xi()));
+  const links = xis.map((u) => ({x1: 2 * u - 1, x2: warpCubic(u)}));
+  const many = d3.range(40000).map(() => warpCubic(xi()));
   return row(
     Plot.plot({width: 320, height: 200, x: {domain: [-1, 1], label: "top: 2ξ − 1   bottom: x = P⁻¹(ξ)"}, y: {axis: null, domain: [-0.1, 1.1]},
       marks: [Plot.ruleY([0, 1], {stroke: "#ccc"}), Plot.link(links, {x1: "x1", y1: 1, x2: "x2", y2: 0, stroke: "steelblue", strokeOpacity: 0.6}),
@@ -457,32 +699,65 @@ For a 2D density with joint CDF ${tex`F(x, y)`}, pick ${tex`x`} from the
 **marginal** CDF ${tex`F(x, y_{\max})`}, then pick ${tex`y`} from the
 conditional CDF ${tex`F(x_i, y) / F(x_i, y_{\max})`}. If ${tex`p`} is
 **separable**, ${tex`p(x, y) = g(x)\,h(y)`}, invert each dimension on its
-own. A uniform disk is separable in ${tex`(r, \phi)`}, with
+own.
+
+In other words, this is 1D inversion done twice. The marginal CDF describes
+${tex`x`} alone, ignoring ${tex`y`}. Once ${tex`x_i`} is chosen, the conditional
+CDF describes ${tex`y`} along that slice, and the division rescales it to end
+at 1.
+
+A uniform disk is separable in ${tex`(r, \phi)`}, with
 ${tex`dA = r\,dr\,d\phi`}:
 
 ${tex.block`F(r_0, \phi_0) = \int_0^{\phi_0}\!\!\int_0^{r_0} \frac{r\, dr\, d\phi}{\pi R^2} = \frac{\phi_0}{2\pi}\cdot\frac{r_0^2}{R^2} \quad\Longrightarrow\quad \phi = 2\pi\xi_1, \quad r = R\sqrt{\xi_2}`}
 
-The square root fixes the crowding of the naive ${tex`r = R\xi_2`}. Check
-with the earlier probability: a uniform point lies in the inner half
-radius with probability ${tex`0.25`}.
+To compare this with the naive ${tex`r = R\xi_2`}, separate the part they
+share from the part that differs. Both turn a canonical pair into polar
+coordinates, here with ${tex`R = 1`}. The pair is a point `{x, y}`, the
+format `jitteredGrid` produces, and they differ only in the radius function:
 
 ```js echo
+function warpToDisk(canonical, radiusOf) {
+  const phi = 2 * Math.PI * canonical.x, r = radiusOf(canonical.y);
+  return {x: r * Math.cos(phi), y: r * Math.sin(phi)};
+}
+const naiveRadius = (xi2) => xi2;
+const areaRadius = (xi2) => Math.sqrt(xi2);
+```
+
+The square root fixes the crowding. Radius 0.5 is where ${tex`\sqrt{\xi_2}`}
+gives 0.5, at ${tex`\xi_2 = 0.25`}, so a quarter of the samples land in the
+inner half radius, matching the earlier probability of ${tex`0.25`}. The
+naive radius sends half of them there. We can measure that fraction:
+
+```js echo
+const innerFraction = (points) =>
+  points.filter((p) => Math.hypot(p.x, p.y) < 0.5).length / points.length;
+```
+
+The orange circle marks the inner half radius. Both plots use the same 576
+canonical pairs, either jittered or fully random:
+
+```js
 const diskJitter = view(Inputs.toggle({label: "jitter (ξ₁, ξ₂) on a 24 × 24 grid", value: true}));
 ```
 
-```js echo
+```js
 (() => {
-  const n = 24, uv = d3.range(n * n).map((k) => diskJitter ? {u: (k % n + xi()) / n, v: (Math.floor(k / n) + xi()) / n} : {u: xi(), v: xi()});
-  const toDisk = (rFn) => uv.map(({u, v}) => { const r = rFn(v), phi = 2 * Math.PI * u; return {x: r * Math.cos(phi), y: r * Math.sin(phi)}; });
-  const naive = toDisk((v) => v), area = toDisk(Math.sqrt);
-  const inner = (pts) => (pts.filter((p) => Math.hypot(p.x, p.y) < 0.5).length / pts.length).toFixed(3);
+  const canonical = diskJitter ? jitteredGrid(24) : d3.range(24 * 24).map(() => ({x: xi(), y: xi()}));
+  const naive = canonical.map((p) => warpToDisk(p, naiveRadius)), area = canonical.map((p) => warpToDisk(p, areaRadius));
   const ring = (svg, x, y) => svg.append("circle").attr("cx", x(0)).attr("cy", y(0)).attr("r", x(0.5) - x(0)).attr("fill", "none").attr("stroke", "orange").attr("stroke-dasharray", "3,2");
   return row(
-    caption(`naive r = ξ₂: inner fraction ${inner(naive)}`, squarePlot(naive, {extra: ring})),
-    caption(`r = √ξ₂: inner fraction ${inner(area)}`, squarePlot(area, {extra: ring}))
+    caption(`naive r = ξ₂: inner fraction ${innerFraction(naive).toFixed(3)}`, squarePlot(naive, {extra: ring})),
+    caption(`r = √ξ₂: inner fraction ${innerFraction(area).toFixed(3)}`, squarePlot(area, {extra: ring}))
   );
 })()
 ```
+
+With jitter on, the fractions are exactly 0.500 and 0.250, because whole rows
+of strata map inside the circle: stratification survives this warp too. With
+jitter off, they fluctuate around those values. The naive disk also shows
+visible crowding at the center, while the square-root warp covers the disk evenly.
 
 ### Sampling the hemisphere
 
@@ -499,23 +774,33 @@ The direction is
 ${tex`\mathbf a = (\cos\phi\sin\theta,\ \sin\phi\sin\theta,\ \cos\theta)`} in
 an orthonormal basis whose ${tex`\mathbf w`} is the lobe's axis, either the
 normal or the mirror direction. For a lobe around the mirror direction,
-discard directions below the surface. The left plot looks down on the
-hemisphere (each direction's ${tex`x, y`}); the right compares the histogram
-of ${tex`\theta`} with its exact density
-${tex`(n+1)\cos^n\theta\sin\theta`}:
+discard directions below the surface.
 
-```js echo
-const cosN = view(Inputs.range([0, 64], {value: 1, step: 1, label: "exponent n (0 = uniform, 1 = cosine)"}));
-```
+In code, there is no need to call `acos`. The inversion gives
+${tex`\cos\theta`} directly, and ${tex`\sin\theta`} follows from
+${tex`\sin^2\theta + \cos^2\theta = 1`}. The result is in local coordinates,
+with the axis ${tex`\mathbf w`} along ${tex`z`}:
 
 ```js echo
 function sampleCosPowerHemisphere(n, u1 = xi(), u2 = xi()) {
-  const phi = 2 * Math.PI * u1, cosTheta = (1 - u2) ** (1 / (n + 1)), sinTheta = Math.sqrt(1 - cosTheta * cosTheta);
-  return {x: Math.cos(phi) * sinTheta, y: Math.sin(phi) * sinTheta, z: cosTheta};
+  const phi = 2 * Math.PI * u1;
+  const cosTheta = (1 - u2) ** (1 / (n + 1));
+  const sinTheta = Math.sqrt(1 - cosTheta * cosTheta);
+  return {
+    x: Math.cos(phi) * sinTheta, y: Math.sin(phi) * sinTheta, z: cosTheta
+  };
 }
 ```
 
-```js echo
+The left plot looks down on the hemisphere (each direction's ${tex`x, y`});
+the right compares the histogram of ${tex`\theta`} with its exact density
+${tex`(n+1)\cos^n\theta\sin\theta`}:
+
+```js
+const cosN = view(Inputs.range([0, 64], {value: 1, step: 1, label: "exponent n (0 = uniform, 1 = cosine)"}));
+```
+
+```js
 (() => {
   const dirs = d3.range(30000).map(() => sampleCosPowerHemisphere(cosN));
   const thetas = dirs.map((d) => Math.acos(d.z)), bw = Math.PI / 2 / 40;
@@ -544,23 +829,48 @@ ${tex`[a, b]`} with ${tex`p < M`}: pick points in
 ${tex`[a,b] \times [0,M]`} and keep those under the curve. Normalizing
 points kept in the unit **ball** (52% accepted) gives uniform **directions**.
 
+The code for the disk is a uniform draw followed by a filter,
+`drawCandidates(n).filter(inUnitDisk)`:
+
 ```js echo
+const inUnitDisk = (p) => p.x * p.x + p.y * p.y < 1;
+const drawCandidates = (n) =>
+  d3.range(n).map(() => ({x: 2 * xi() - 1, y: 2 * xi() - 1}));
+```
+
+We pay for this simplicity with wasted samples. The expected fraction kept is
+the target's area divided by the box's area, ${tex`\pi/4 \approx 0.785`}. In
+the plot, blue candidates are kept and red ones are rejected:
+
+```js
 const rejectN = view(Inputs.range([100, 3000], {value: 800, step: 100, label: "candidates"}));
 ```
 
-```js echo
+```js
 (() => {
-  const cands = d3.range(rejectN).map(() => ({x: 2 * xi() - 1, y: 2 * xi() - 1}));
-  cands.forEach((p) => (p.fill = p.x * p.x + p.y * p.y < 1 ? "steelblue" : "#d55"));
-  const kept = cands.filter((p) => p.fill === "steelblue").length;
-  // In d dimensions the acceptance rate is the ball's volume / the cube's volume.
-  const ballVolume = (d) => (d === 0 ? 1 : d === 1 ? 2 : (2 * Math.PI / d) * ballVolume(d - 2));   // V_d = (2π/d) V_{d−2}
-  const ballFraction = (d) => ballVolume(d) / 2 ** d;
-  return row(squarePlot(cands, {r: 2}), html`<pre style="align-self:center">kept ${kept} of ${rejectN} = ${(kept / rejectN).toFixed(3)}   (π/4 = ${(Math.PI / 4).toFixed(3)})
-
-acceptance rate for a ball in d dimensions:
-${[2, 3, 6, 10].map((d) => `  d = ${String(d).padStart(2)}: ${ballFraction(d).toFixed(4)}`).join("\n")}</pre>`);
+  const cands = drawCandidates(rejectN);
+  cands.forEach((p) => (p.fill = inUnitDisk(p) ? "steelblue" : "#d55"));
+  const kept = cands.filter(inUnitDisk).length;
+  return row(squarePlot(cands, {r: 2}), html`<pre style="align-self:center">kept ${kept} of ${rejectN} = ${(kept / rejectN).toFixed(3)}   (π/4 = ${(Math.PI / 4).toFixed(3)})</pre>`);
 })()
+```
+
+The price rises sharply with dimension. In ${tex`d`} dimensions, the
+acceptance rate is the volume of the ball divided by the volume of the cube,
+${tex`2^d`}. Ball volumes follow the recurrence
+${tex`V_d = (2\pi/d)\,V_{d-2}`}:
+
+```js echo
+const ballVolume = (d) =>
+  d === 0 ? 1 : d === 1 ? 2 : (2 * Math.PI / d) * ballVolume(d - 2);
+const acceptanceRate = (d) => ballVolume(d) / 2 ** d;
+```
+
+For ${tex`d = 2, 3, 6, 10`}, the rate collapses. At ${tex`d = 10`}, only about
+one candidate in 400 survives:
+
+```js echo
+[2, 3, 6, 10].map(acceptanceRate)
 ```
 
 Rejection is simple and works for any shape, but it wastes samples,
@@ -584,29 +894,86 @@ ${tex`f(\mathbf x)\,t(\mathbf x \to \mathbf y)\,a(\mathbf x \to \mathbf y) = f(\
 For a **symmetric** proposal, such as the small Gaussian step below, the
 ${tex`t`} terms cancel and ${tex`a = \min(1, f(\mathbf y)/f(\mathbf x))`}.
 
+Our target has two bumps of different heights. It is not normalized, and the
+sampler never needs its total area:
+
 ```js echo
-const metroF = (x) => (x < 0 || x > 1 ? 0 : 0.6 * Math.exp(-(((x - 0.25) / 0.06) ** 2)) + Math.exp(-(((x - 0.7) / 0.1) ** 2)));
-const metroArea = d3.sum(d3.range(0, 1, 1e-4), (x) => metroF(x + 5e-5) * 1e-4);
-function gaussian() { return Math.sqrt(-2 * Math.log(1 - xi())) * Math.cos(2 * Math.PI * xi()); }
+const bump = (x, center, width) => Math.exp(-(((x - center) / width) ** 2));
+const metroF = (x) =>
+  x < 0 || x > 1 ? 0 : 0.6 * bump(x, 0.25, 0.06) + bump(x, 0.7, 0.1);
+```
+
+Evaluate it at the two peaks and the valley between them. We expect about 0.6,
+a value near 0, and 1:
+
+```js echo
+[0.25, 0.5, 0.7].map(metroF)
+```
+
+The proposal is a small Gaussian step. `gaussian()` turns two canonical
+numbers into a standard normal value using the **Box–Muller transform**. The
+resulting step is symmetric: moving from ${tex`x`} to ${tex`y`} is as likely as
+the reverse.
+
+```js echo
+function gaussian() {
+  return Math.sqrt(-2 * Math.log(1 - xi())) * Math.cos(2 * Math.PI * xi());
+}
+```
+
+One step follows the two numbered rules. A move to a higher value of
+${tex`f`} makes the ratio at least 1, so it is always accepted. A move
+downhill is accepted only sometimes, which lets the chain cross valleys
+without settling at a peak:
+
+```js echo
+function metropolisStep(f, x, stepSize) {
+  const y = x + stepSize * gaussian();              // 1. propose
+  const accept = xi() < Math.min(1, f(y) / f(x));   // 2. accept or reject
+  return accept ? y : x;
+}
+```
+
+The chain is that step repeated, starting from `x = 0.5`, where
+${tex`f > 0`}. One detail is easy to miss: a rejected move still records
+`x` again. Dropping those repeats would make the samples follow the wrong
+density.
+
+```js echo
 function metropolis(f, steps, stepSize, x = 0.5) {
   const chain = [];
-  let accepted = 0;
   for (let i = 0; i < steps; i++) {
-    const y = x + stepSize * gaussian();
-    if (xi() < Math.min(1, f(y) / f(x))) { x = y; accepted++; }
-    chain.push(x);                                       // a rejected move repeats x
+    x = metropolisStep(f, x, stepSize);
+    chain.push(x);
   }
-  return {chain, rate: accepted / steps};
+  return chain;
 }
+```
+
+Run a short chain to see this. Repeated values in the output are rejected moves:
+
+```js echo
+metropolis(metroF, 14, 0.1)
+```
+
+The chain starts wherever we put it, so the first samples still reflect that
+choice. We therefore discard them before using the rest, here with
+`chain.slice(500)`. The left plot is a histogram of the remaining samples.
+The right plot shows the path of the first 600 steps. The acceptance rate
+counts how often consecutive samples differ.
+
+```js
+const metroArea = d3.sum(d3.range(0, 1, 1e-4), (x) => metroF(x + 5e-5) * 1e-4);   // only to scale the red curve
 const metroForm = view(Inputs.form({
   steps: Inputs.range([1000, 100000], {value: 20000, step: 1000, label: "steps"}),
   step: Inputs.range([0.005, 1], {value: 0.1, step: 0.005, label: "proposal step size"})
 }));
 ```
 
-```js echo
+```js
 (() => {
-  const {chain, rate} = metropolis(metroF, metroForm.steps, metroForm.step);
+  const chain = metropolis(metroF, metroForm.steps, metroForm.step);
+  const rate = d3.mean(d3.range(1, chain.length), (i) => (chain[i] !== chain[i - 1] ? 1 : 0));
   const kept = chain.slice(500), bw = 0.02;                // discard the start-up samples
   return html`<div>${row(
     Plot.plot({width: 340, height: 200, x: {label: "x", domain: [0, 1]}, y: {label: "density"},
@@ -618,11 +985,10 @@ const metroForm = view(Inputs.form({
 })()
 ```
 
-The histogram matches ${tex`f/\int f`} (red). The trace (first 600 steps)
-shows that samples are **correlated**. With tiny steps the chain rarely
-jumps between the two bumps. With huge steps most proposals are rejected.
-Discard the early samples, as the code does. Metropolis Light Transport
-uses the same idea on light paths.
+The histogram matches ${tex`f/\int f`} (red). The trace shows that samples
+are **correlated**. With tiny steps the chain rarely jumps between the two
+bumps. With huge steps most proposals are rejected. Metropolis Light
+Transport uses the same idea on light paths.
 
 ## Example: Fair Random Lines
 
@@ -664,25 +1030,32 @@ ${tex.block`d\mu = \lvert\cos\theta_d\rvert\; dx\,dy\; \sin\theta_d\,d\theta_d\,
 The factor ${tex`\lvert\cos\theta_d\rvert\,dx\,dy`} is the bundle's
 **cross-section**, the 3D version of the ${tex`\cos\phi`} in 2D. (The book
 omits this factor.) Two uniform random points on a sphere give uniformly
-distributed lines through it. Check: a fair line through a unit sphere
-crosses a perpendicular disk uniformly by area, so it passes within half
-the radius of the center with probability 0.25. The midpoint of the chord
-is the line's closest point to the center:
+distributed lines through it. A uniform point on a sphere needs only a
+uniform ${tex`z`} and a uniform azimuth:
 
 ```js echo
-(() => {
-  const onSphere = () => {
-    const z = 2 * xi() - 1, s = Math.sqrt(1 - z * z), phi = 2 * Math.PI * xi();
-    return [s * Math.cos(phi), s * Math.sin(phi), z];
-  };
-  const trials = 200000;
-  let inner = 0;
-  for (let t = 0; t < trials; t++) {
-    const a = onSphere(), b = onSphere();
-    if (Math.hypot(a[0] + b[0], a[1] + b[1], a[2] + b[2]) / 2 < 0.5) inner++;
-  }
-  return html`<pre>lines passing within half the radius: ${(inner / trials).toFixed(4)}   (exact 0.25)</pre>`;
-})()
+function randomOnSphere() {
+  const z = 2 * xi() - 1, s = Math.sqrt(1 - z * z), phi = 2 * Math.PI * xi();
+  return [s * Math.cos(phi), s * Math.sin(phi), z];
+}
+```
+
+Here is a check: a fair line through a unit sphere crosses a perpendicular
+disk uniformly by area, so it passes within half the radius of the center
+with probability 0.25. The midpoint of the chord is the line's closest point
+to the center, so we only need the midpoint's distance from the origin:
+
+```js echo
+function lineWithinHalfRadius() {
+  const a = randomOnSphere(), b = randomOnSphere();
+  return Math.hypot(a[0] + b[0], a[1] + b[1], a[2] + b[2]) / 2 < 0.5;
+}
+```
+
+The fraction of 200,000 lines that pass this test should be close to 0.25:
+
+```js echo
+d3.mean(d3.range(200000), () => (lineWithinHalfRadius() ? 1 : 0))
 ```
 
 ### Random lines through a square
@@ -694,8 +1067,11 @@ ${tex`\theta`} that still touches the square. Sample **uniformly under**
 it: choose ${tex`\theta = P^{-1}(\xi_1)`} for
 ${tex`p(\theta) = r_{\max}(\theta)/4`}, then set
 ${tex`r = \xi_2\, r_{\max}(\theta)`}. The 4 is
-${tex`\int r_{\max}\,d\theta`}, the square's **perimeter**. Inverting the
-CDF piece by piece:
+${tex`\int r_{\max}\,d\theta`}, the square's **perimeter**. The formulas
+below are piecewise because the farthest corner of the square changes with
+${tex`\theta`}: it is ${tex`(1, 0)`}, then ${tex`(1, 1)`}, then ${tex`(0, 1)`},
+and no line with ${tex`r \ge 0`} touches the square in the first range.
+Inverting the CDF piece by piece:
 
 ${tex.block`r_{\max}(\theta) = \begin{cases}
 0 & \theta \in [-\pi, -\tfrac\pi2] \\
@@ -720,6 +1096,9 @@ ${tex.block`\theta = \begin{cases}
 **Book erratum:** the book prints ${tex`\tfrac{\sqrt2}{2}`} in the middle
 branch; solving the middle ${tex`P`} gives ${tex`\sqrt2`}.
 
+Each case of those formulas becomes one branch of a function. First
+${tex`r_{\max}`}:
+
 ```js echo
 function rMax(theta) {
   if (theta < -Math.PI / 2) return 0;
@@ -727,24 +1106,52 @@ function rMax(theta) {
   if (theta < Math.PI / 2) return Math.SQRT2 * Math.cos(theta - Math.PI / 4);
   return Math.sin(theta);
 }
+```
+
+Then the inverse CDF:
+
+```js echo
 function sampleTheta(u) {
   if (u < 1 / 4) return Math.asin(4 * u - 1);
   if (u <= 3 / 4) return Math.asin(Math.SQRT2 * (2 * u - 1)) + Math.PI / 4;
   return Math.acos(3 - 4 * u);
 }
+```
+
+A piecewise inverse is easy to get wrong, so test the seams. The branches
+must join up, and ${tex`\xi_1 = 0, \tfrac14, \tfrac34, 1`} should give
+${tex`\theta = -\tfrac\pi2, 0, \tfrac\pi2, \pi`}, or about -1.571, 0, 1.571,
+and 3.142. The second value prints as a tiny number near ${tex`10^{-16}`}. That
+is floating-point rounding error, effectively 0. This is also the check that
+exposes the book's erratum:
+
+```js echo
+[0, 1 / 4, 3 / 4, 1].map(sampleTheta)
+```
+
+A fair line now takes two steps: choose an angle in proportion to the
+available ${tex`r_{\max}`}, then choose a distance uniformly below that limit.
+
+```js echo
 function fairLine() {
   const theta = sampleTheta(xi());
   return {theta, r: xi() * rMax(theta)};
 }
-// Naive: the line through two uniform random points of the square.
+```
+
+For comparison, here is the obvious alternative: the line through two
+uniform random points. The normal is perpendicular to `b - a`. If that normal
+gives a negative `r`, the second return describes the same line with the
+normal flipped, which keeps ${tex`r \ge 0`}.
+
+```js echo
 function naiveLine() {
   const a = {x: xi(), y: xi()}, b = {x: xi(), y: xi()};
-  const theta = Math.atan2(b.x - a.x, -(b.y - a.y));   // the normal, perpendicular to b - a
+  const theta = Math.atan2(b.x - a.x, -(b.y - a.y));
   const r = a.x * Math.cos(theta) + a.y * Math.sin(theta);
   if (r >= 0) return {theta, r};
-  return {theta: theta < 0 ? theta + Math.PI : theta - Math.PI, r: -r};   // the same line, with r ≥ 0
+  return {theta: theta < 0 ? theta + Math.PI : theta - Math.PI, r: -r};
 }
-const hits = (line, c, radius) => Math.abs(c.x * Math.cos(line.theta) + c.y * Math.sin(line.theta) - line.r) < radius;
 ```
 
 A test of fairness: the chance that a line hits a small disk should depend
@@ -752,16 +1159,30 @@ only on the disk's size, **not on where the disk is**. In fact, the measure
 of the lines hitting a convex shape is its perimeter, so a fair line hits a
 disk of radius 0.06 with probability ${tex`2\pi(0.06)/4 \approx 9.42\%`}.
 
+Normal coordinates make the test short. The expression
+${tex`x\cos\theta + y\sin\theta - r`} is the signed distance from a point
+to the line, so a line hits a disk when that distance at the disk's center
+is smaller than the radius:
+
 ```js echo
+const hits = ({theta, r}, c, radius) =>
+  Math.abs(c.x * Math.cos(theta) + c.y * Math.sin(theta) - r) < radius;
+const hitRate = (makeLine, c, radius, trials = 40000) =>
+  d3.mean(d3.range(trials), () => (hits(makeLine(), c, radius) ? 1 : 0));
+```
+
+The plots show ${tex`(r, \theta)`} space with ${tex`r_{\max}`} in red, then
+40 of the lines through the square with the two test disks:
+
+```js
 const lineMethod = view(Inputs.radio(["fair: uniform in (r, θ)", "naive: through two random points"], {value: "fair: uniform in (r, θ)", label: "lines"}));
 ```
 
-```js echo
+```js
 (() => {
   const make = lineMethod.startsWith("fair") ? fairLine : naiveLine;
   const disks = [{x: 0.5, y: 0.5, label: "center"}, {x: 0.875, y: 0.875, label: "corner"}], radius = 0.06, trials = 40000;
-  const counts = disks.map(() => 0);
-  for (let t = 0; t < trials; t++) { const L = make(); disks.forEach((c, k) => { if (hits(L, c, radius)) counts[k]++; }); }
+  const rates = disks.map((c) => hitRate(make, c, radius, trials));
   const lines = d3.range(40).map(make);
   const dual = Plot.plot({width: 300, height: 260, x: {label: "θ", domain: [-Math.PI, Math.PI]}, y: {label: "r", domain: [0, 1.5]},
     marks: [Plot.dot(d3.range(1500).map(make), {x: "theta", y: "r", r: 1, fill: "steelblue"}),
@@ -779,8 +1200,8 @@ const lineMethod = view(Inputs.radio(["fair: uniform in (r, θ)", "naive: throug
   }
   svg.append("rect").attr("x", x(0)).attr("y", y(1)).attr("width", x(1) - x(0)).attr("height", y(0) - y(1)).attr("fill", "none").attr("stroke", "gray");
   disks.forEach((c) => svg.append("circle").attr("cx", x(c.x)).attr("cy", y(c.y)).attr("r", x(radius) - x(0)).attr("fill", "orangered").attr("fill-opacity", 0.5));
-  return row(dual, svg.node(), html`<pre style="align-self:center">${disks.map((c, k) => `lines hitting the ${c.label} disk: ${(100 * counts[k] / trials).toFixed(2)}%`).join("\n")}
-(${trials} lines)</pre>`);
+  return row(dual, svg.node(), html`<pre style="align-self:center">${disks.map((c, k) => `lines hitting the ${c.label} disk: ${(100 * rates[k]).toFixed(2)}%`).join("\n")}
+(${trials} lines per disk)</pre>`);
 })()
 ```
 
@@ -792,93 +1213,204 @@ it before rejection or Metropolis.
 
 ## Sampling in WebGPU
 
+Everything so far ran on the CPU. This section ports the same ideas to
+shaders. The WGSL is stored in JavaScript strings, so we can discuss each
+function on its own. Each demo then joins its strings into one complete
+shader, which you can expand and read. Creating the device, pipelines, and
+canvases follows Module 04 and runs out of sight.
+
+These strings are JavaScript template literals, so `$` followed by a value in
+braces inserts that value into the WGSL text before the GPU compiles it. That
+lets the shaders and the host share the image sizes:
+
 ```js echo
+const starSize = 300;                  // Siemens star canvas, in pixels
+const aoWidth = 400, aoHeight = 260;   // ambient occlusion image, in pixels
+```
+
+```js
 const {device, format: canvasFormat} = await initializeWebGPU(document.createElement("canvas"));   // a blank canvas: each demo adds its own below
 const deviceErrorLog = document.createElement("pre");
 deviceErrorLog.style.cssText = "display: none; color: #e5484d; background: #2a1214; border: 1px solid #e5484d; border-radius: 6px; padding: 8px 12px; font-size: 12px; white-space: pre-wrap;";
 device.addEventListener("uncapturederror", (e) => { deviceErrorLog.textContent += `WebGPU error: ${e.error.message}\n`; deviceErrorLog.style.display = "block"; });
+const showShader = (code) => html`<pre><code>${code.trim()}</code></pre>`;
 ```
 
-```js echo
+```js
 deviceErrorLog
 ```
 
 ### Random numbers in a shader
 
-WGSL has no `Math.random()`. Instead, **hash** the pixel position and the
-frame number into a seed with the PCG hash, then draw ${tex`\xi`} values
-from it. The seed is passed as a pointer, so each call advances the
-caller's variable:
+WGSL has no `Math.random()`. Shader invocations run in parallel and cannot
+share a generator, so each pixel or vertex must make its own random numbers.
+The standard approach is to **hash** values that identify the invocation,
+such as its pixel position and the frame number, into a seed. The PCG hash
+mixes its input bits so thoroughly that neighboring inputs give unrelated
+outputs:
 
 ```js echo
-const wgslRandom = `
-fn pcg(v: u32) -> u32 {                          // PCG hash
+const wgslPcg = `
+fn pcg(v: u32) -> u32 {
   let state = v * 747796405u + 2891336453u;
   let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
   return (word >> 22u) ^ word;
-}
-fn rand(seed: ptr<function, u32>) -> f32 {      // canonical ξ in [0, 1)
-  *seed = pcg(*seed);
-  return f32(*seed >> 8u) / 16777216.0;         // 24 bits: never rounds up to 1.0
 }`;
+```
+
+`rand` then draws ${tex`\xi`} values from the seed. The seed is passed as a
+pointer, so each call advances the caller's variable and the next call gets
+a new number. An `f32` has a 24-bit mantissa, so we keep 24 bits of the hash
+and divide by ${tex`2^{24}`}. The result can never round up to 1.0:
+
+```js echo
+const wgslRand = `
+fn rand(seed: ptr<function, u32>) -> f32 {
+  *seed = pcg(*seed);
+  return f32(*seed >> 8u) / 16777216.0;
+}`;
+const wgslRandom = wgslPcg + wgslRand;
 ```
 
 ### Warping samples in WGSL
 
 The warps from [Choosing Random Points](#choosing-random-points) port
-directly to WGSL. `toWorld` builds a basis around a normal, which plays the
-role of ${tex`\mathbf w`}:
+directly to WGSL, starting with a few constants they need:
 
 ```js echo
-const wgslWarps = `
+const wgslConstants = `
 const PI = 3.14159265;
+const X_AXIS = vec3<f32>(1.0, 0.0, 0.0);
+const Y_AXIS = vec3<f32>(0.0, 1.0, 0.0);`;
+```
 
+The cubic warp needs some care because WGSL has no `cbrt` and `pow` requires a
+base that is not negative, so we take the root of `abs(t)` and restore the sign:
+
+```js echo
+const wgslSampleCubic = `
 fn sampleCubic(xi: f32) -> f32 {                         // p(x) = 3x²/2
-  let t = 2.0 * xi - 1.0;                                // pow needs a positive base
-  return select(0.0, sign(t) * pow(abs(t), 1.0 / 3.0), t != 0.0);
-}
-fn sampleDisk(xi: vec2<f32>, R: f32) -> vec2<f32> {      // lens, area light
+  let t = 2.0 * xi - 1.0;
+  return sign(t) * pow(abs(t), 1.0 / 3.0);
+}`;
+```
+
+The disk warp is the same `areaRadius` formula as before, used for points on
+a lens or an area light:
+
+```js echo
+const wgslSampleDisk = `
+fn sampleDisk(xi: vec2<f32>, R: f32) -> vec2<f32> {
   let phi = 2.0 * PI * xi.x;
   let r = R * sqrt(xi.y);
   return vec2<f32>(r * cos(phi), r * sin(phi));
-}
-fn sampleCosineHemisphere(xi: vec2<f32>) -> vec3<f32> {  // pdf = cos θ / π
+}`;
+```
+
+The cosine-weighted hemisphere is that disk lifted onto the hemisphere: the
+disk point gives ${tex`x, y`}, and ${tex`z = \sqrt{1 - x^2 - y^2} = \sqrt{1 - \xi_2}`}
+puts it on the unit sphere. Its pdf is ${tex`\cos\theta/\pi`}:
+
+```js echo
+const wgslSampleCosine = `
+fn sampleCosineHemisphere(xi: vec2<f32>) -> vec3<f32> {
   let phi = 2.0 * PI * xi.x;
   let s = sqrt(xi.y);
   return vec3<f32>(cos(phi) * s, sin(phi) * s, sqrt(1.0 - xi.y));
-}
-fn toWorld(v: vec3<f32>, nrm: vec3<f32>) -> vec3<f32> {  // basis (t, b, nrm)
-  // select(falseValue, trueValue, condition): pick a helper axis not parallel to nrm
-  let a = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(nrm.x) > 0.9);
+}`;
+```
+
+That direction is in local coordinates, with ${tex`z`} along the axis, but
+surfaces can face any way. `toWorld` builds an orthonormal basis around the
+normal, which plays the role of ${tex`\mathbf w`}. The helper axis `a` only
+needs to be not parallel to the normal, so that the cross product is well
+defined. WGSL's `select(falseValue, trueValue, condition)` makes that choice:
+
+```js echo
+const wgslToWorld = `
+fn toWorld(v: vec3<f32>, nrm: vec3<f32>) -> vec3<f32> {
+  let a = select(X_AXIS, Y_AXIS, abs(nrm.x) > 0.9);
   let t = normalize(cross(a, nrm));
   let b = cross(nrm, t);
   return v.x * t + v.y * b + v.z * nrm;
 }`;
 ```
 
-The vertex shader below draws each point from its `vertex_index` alone: it
-seeds `rand`, warps the pair, and outputs the position. All the sampling
-runs on the GPU.
+Together, these functions form our warp library:
 
 ```js echo
-const warpSize = 300;
-const warpModule = device.createShaderModule({code: `${wgslRandom}${wgslWarps}
-struct Params { mode: u32, seed: u32 };
-@group(0) @binding(0) var<uniform> params: Params;
+const wgslWarps = [wgslConstants, wgslSampleCubic, wgslSampleDisk,
+  wgslSampleCosine, wgslToWorld].join("\n");
+```
 
+To see these warps run on the GPU, we draw points with **no vertex buffer**:
+each vertex computes its own position from its index. The shader needs two
+values from the host, which warp to apply and a seed:
+
+```js echo
+const wgslWarpParams = `
+struct Params { mode: u32, seed: u32 };
+@group(0) @binding(0) var<uniform> params: Params;`;
+```
+
+We also want the naive disk for comparison:
+
+```js echo
+const wgslNaiveDisk = `
+fn naiveDisk(xi: vec2<f32>) -> vec2<f32> {
+  return xi.y * vec2<f32>(cos(2.0 * PI * xi.x), sin(2.0 * PI * xi.x));
+}`;
+```
+
+`warpPoint` applies the warp chosen by `mode`. The last case warps ${tex`x`} and
+leaves ${tex`y`} uniform, so the density shows up as vertical bands:
+
+```js echo
+const wgslWarpPoint = wgslNaiveDisk + `
+fn warpPoint(xi: vec2<f32>, mode: u32) -> vec2<f32> {
+  if (mode == 0u) { return naiveDisk(xi); }
+  if (mode == 1u) { return sampleDisk(xi, 1.0); }
+  if (mode == 2u) { return sampleCosineHemisphere(xi).xy; }   // top view
+  return vec2<f32>(sampleCubic(xi.x), 2.0 * xi.y - 1.0);
+}`;
+```
+
+The vertex shader seeds `rand` from the vertex index, draws a canonical pair,
+and warps it. Hashing makes consecutive indices unrelated:
+
+```js echo
+const wgslWarpVertex = `
 @vertex
 fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
   var seed = pcg(i + pcg(params.seed));
   let xi = vec2<f32>(rand(&seed), rand(&seed));
-  var p: vec2<f32>;
-  if (params.mode == 0u) { p = xi.y * vec2<f32>(cos(2.0 * PI * xi.x), sin(2.0 * PI * xi.x)); }  // naive disk
-  else if (params.mode == 1u) { p = sampleDisk(xi, 1.0); }
-  else if (params.mode == 2u) { p = sampleCosineHemisphere(xi).xy; }                            // top view
-  else { p = vec2<f32>(sampleCubic(xi.x), 2.0 * xi.y - 1.0); }                                  // x warped, y uniform
-  return vec4<f32>(0.95 * p, 0.0, 1.0);
-}
+  return vec4<f32>(0.95 * warpPoint(xi, params.mode), 0.0, 1.0);
+}`;
+```
+
+The fragment shader only paints each point:
+
+```js echo
+const wgslWarpFragment = `
 @fragment
-fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(0.4, 0.7, 1.0, 1.0); }`});
+fn fs_main() -> @location(0) vec4<f32> {
+  return vec4<f32>(0.4, 0.7, 1.0, 1.0);
+}`;
+```
+
+Joining the strings gives the complete shader:
+
+```js echo
+const warpShader = [wgslRandom, wgslWarps, wgslWarpParams, wgslWarpPoint,
+  wgslWarpVertex, wgslWarpFragment].join("\n");
+```
+
+```js
+showShader(warpShader)
+```
+
+```js
+const warpModule = device.createShaderModule({code: warpShader});
 const warpPipeline = device.createRenderPipeline({
   layout: "auto",
   vertex: {module: warpModule, entryPoint: "vs_main"},
@@ -888,20 +1420,20 @@ const warpPipeline = device.createRenderPipeline({
 const warpUniforms = device.createBuffer({size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
 const warpBindGroup = device.createBindGroup({layout: warpPipeline.getBindGroupLayout(0), entries: [{binding: 0, resource: {buffer: warpUniforms}}]});
 const warpCanvas = document.createElement("canvas");
-warpCanvas.width = warpCanvas.height = warpSize;
+warpCanvas.width = warpCanvas.height = starSize;
 warpCanvas.style.borderRadius = "8px";
 const {context: warpContext} = await initializeWebGPU(warpCanvas, {device});
 const warpNames = ["naive disk: r = ξ₂", "sampleDisk", "sampleCosineHemisphere (top view)", "sampleCubic (x only)"];
 ```
 
-```js echo
+```js
 const warpForm = view(Inputs.form({
   warp: Inputs.select(warpNames, {value: "sampleDisk", label: "warp"}),
   points: Inputs.range([500, 50000], {value: 8000, step: 500, label: "points"})
 }));
 ```
 
-```js echo
+```js
 {
   device.queue.writeBuffer(warpUniforms, 0, new Uint32Array([warpNames.indexOf(warpForm.warp), 1, 0, 0]));
   const encoder = device.createCommandEncoder();
@@ -914,78 +1446,145 @@ const warpForm = view(Inputs.form({
 }
 ```
 
-```js echo
+```js
 warpCanvas
 ```
 
-### A jittered ray through a pixel
-
-Module 10's `viewingRay(i, j, ...)` takes integer pixels, adds 0.5, and
-counts ${tex`j`} up. Sampling needs a ray through **any** point `q` of the
-image, given in pixel units with ${tex`y`} growing **down** like `id`. Here
-`cam`, `Ray`, and `trace` follow Module 10, and `trace` is defined in the
-ambient occlusion example below, where this function runs. The `seed` is
-passed along for random bounce directions.
-
-```js echo
-const wgslRadiance = `
-fn radiance(q: vec2<f32>, seed: ptr<function, u32>) -> vec3<f32> {
-  let dims = vec2<f32>(${aoWidth}.0, ${aoHeight}.0);
-  let us = cam.l + (cam.r - cam.l) * q.x / dims.x;             // no + 0.5: the jitter supplies it
-  let vs = cam.b + (cam.t - cam.b) * (dims.y - q.y) / dims.y;  // continuous flip: ny − y
-  return trace(Ray(cam.e, normalize(-cam.dist * cam.w + us * cam.u + vs * cam.v)), seed);
-}`;
-```
-
-One sample is `radiance(vec2<f32>(id.xy) + vec2<f32>(rand(&seed), rand(&seed)), &seed)`.
+These are the same warps as before, now running entirely on the GPU. The naive
+disk crowds the center. `sampleDisk` and the top view of the cosine hemisphere
+look alike because they are the same distribution. `sampleCubic` empties the
+middle and piles points toward both sides, matching ${tex`p(x) = \tfrac32x^2`}.
 
 ### Stratified pixel samples
 
 Jitter inside the pixel with `side` × `side` strata: each stratum is a
 ${tex`\tfrac{1}{\text{side}} \times \tfrac{1}{\text{side}}`} cell of the
 pixel, with one random point inside. This is
-[stratified sampling](#stratified-sampling) applied to a pixel. The shader
-below estimates the coverage of each pixel of a **Siemens star**, whose thin
-spokes alias badly. Its `inside(q)` plays the role of `radiance(q)`, with a
-choice of pattern:
+[stratified sampling](#stratified-sampling) applied to a pixel. Our test image
+is a **Siemens star**, whose thin spokes alias badly. The function `inside(q)`
+is 1 on a spoke and 0 elsewhere, and we will estimate its average over each
+pixel:
 
 ```js echo
-const starSize = 300;
-const starModule = device.createShaderModule({code: `${wgslRandom}${wgslHammersley}
-struct Params { side: u32, mode: u32, seed: u32, pad: u32 };
-@group(0) @binding(0) var<uniform> params: Params;
-
-@vertex
-fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
-  var pos = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
-  return vec4<f32>(pos[i], 0.0, 1.0);                     // one triangle covers the screen
-}
-
-fn inside(p: vec2<f32>) -> f32 {                           // Siemens star with 36 spokes
+const wgslInside = `
+fn inside(p: vec2<f32>) -> f32 {   // Siemens star with 36 spokes
   let d = p - vec2<f32>(${starSize / 2}.0);
   if (length(d) > ${starSize * 0.47}) { return 0.0; }
   return select(0.0, 1.0, fract(atan2(d.y, d.x) / 6.2831853 * 36.0) < 0.5);
-}
+}`;
+```
 
+The host chooses the grid size and the pattern. Here `pad` only rounds the
+struct up to 16 bytes:
+
+```js echo
+const wgslStarParams = `
+struct Params { side: u32, mode: u32, seed: u32, pad: u32 };
+@group(0) @binding(0) var<uniform> params: Params;`;
+```
+
+### Quasi-random pixel samples
+
+We will compare jitter with a quasi-random pattern. Hammersley points need the
+base-2 radical inverse. The loop in `radicalInverse` mirrored the digits one
+at a time, but in base 2 that mirror is a **bit reversal**, which WGSL provides
+as `reverseBits`. We keep the top 24 bits, as `rand` did:
+
+```js echo
+const wgslHammersley = `
+fn hammersley(k: u32, N: u32) -> vec2<f32> {
+  return vec2<f32>(f32(k) / f32(N), f32(reverseBits(k) >> 8u) / 16777216.0);
+}`;
+```
+
+The pattern is deterministic, so every pixel would use the same points, and the
+errors would line up into visible patterns. The fix is to shift the shared
+pattern by a random offset per pixel, wrapping around with `fract`. This is a
+**Cranley–Patterson rotation**.
+
+### Comparing the patterns
+
+A small helper places a point inside the grid cell of sample `k`. The offset
+is measured within the cell, from 0 to 1 per axis:
+
+```js echo
+const wgslInCell = `
+fn inCell(k: u32, offset: vec2<f32>) -> vec2<f32> {
+  let cell = vec2<f32>(f32(k % params.side), f32(k / params.side));
+  return (cell + offset) / f32(params.side);
+}`;
+```
+
+`sampleAt` returns the position of sample `k` inside the pixel for each of four
+patterns. Compare the first two branches: the regular pattern uses the center
+of each cell, and the jittered pattern uses a random spot in it. That one change
+replaces the aliasing with noise. The last line is the rotation described above.
+
+```js echo
+const wgslSampleAt = `
+fn sampleAt(k: u32, rot: vec2<f32>, seed: ptr<function, u32>) -> vec2<f32> {
+  let r = vec2<f32>(rand(seed), rand(seed));
+  if (params.mode == 0u) { return inCell(k, vec2<f32>(0.5)); }   // regular
+  if (params.mode == 1u) { return inCell(k, r); }                // jittered
+  if (params.mode == 2u) { return r; }                           // random
+  return fract(hammersley(k, params.side * params.side) + rot);
+}`;
+```
+
+The coverage of a pixel is a Monte Carlo estimate: the average of `inside`
+over its ${tex`\text{side}^2`} samples.
+
+```js echo
+const wgslCoverage = `
+fn coverage(p: vec2<f32>, seed: ptr<function, u32>) -> f32 {
+  let N = params.side * params.side;
+  let rot = vec2<f32>(rand(seed), rand(seed));
+  var sum = 0.0;
+  for (var k = 0u; k < N; k++) { sum += inside(p + sampleAt(k, rot, seed)); }
+  return sum / f32(N);
+}`;
+```
+
+To run a shader on every pixel, we draw one triangle large enough to cover the
+screen. Both remaining demos use this vertex shader:
+
+```js echo
+const wgslFullscreenVertex = `
+@vertex
+fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+  var pos = array<vec2<f32>, 3>(
+    vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+  return vec4<f32>(pos[i], 0.0, 1.0);
+}`;
+```
+
+The fragment shader gives every pixel its own seed by hashing both of its
+coordinates. Coverage is a linear quantity, so it is gamma-encoded for display:
+
+```js echo
+const wgslStarFragment = `
 @fragment
 fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
   var seed = pcg(u32(frag.x) + pcg(u32(frag.y) + pcg(params.seed)));
-  let side = params.side;
-  let N = side * side;
-  let shift = vec2<f32>(rand(&seed), rand(&seed));         // per-pixel random shift for Hammersley
-  var covered = 0.0;
-  for (var k = 0u; k < N; k++) {
-    let cell = vec2<f32>(f32(k % side), f32(k / side));
-    var offset: vec2<f32>;
-    if (params.mode == 0u) { offset = (cell + 0.5) / f32(side); }                                   // regular
-    else if (params.mode == 1u) { offset = (cell + vec2<f32>(rand(&seed), rand(&seed))) / f32(side); } // jittered
-    else if (params.mode == 2u) { offset = vec2<f32>(rand(&seed), rand(&seed)); }                   // random
-    else { offset = fract(hammersley(k, N) + shift); }                                              // Hammersley
-    covered += inside(floor(frag.xy) + offset);
-  }
-  let c = covered / f32(N);
-  return vec4<f32>(vec3<f32>(pow(c, 1.0 / 2.2)), 1.0);    // coverage is linear; encode for display
-}`});
+  let c = coverage(floor(frag.xy), &seed);
+  return vec4<f32>(vec3<f32>(pow(c, 1.0 / 2.2)), 1.0);
+}`;
+```
+
+Here is the complete shader:
+
+```js echo
+const starShader = [wgslRandom, wgslHammersley, wgslStarParams,
+  wgslFullscreenVertex, wgslInside, wgslInCell, wgslSampleAt, wgslCoverage,
+  wgslStarFragment].join("\n");
+```
+
+```js
+showShader(starShader)
+```
+
+```js
+const starModule = device.createShaderModule({code: starShader});
 const starPipeline = device.createRenderPipeline({
   layout: "auto",
   vertex: {module: starModule, entryPoint: "vs_main"},
@@ -1002,14 +1601,14 @@ starZoom.width = starZoom.height = 240;
 starZoom.style.cssText = "border-radius: 8px; image-rendering: pixelated";
 ```
 
-```js echo
+```js
 const starForm = view(Inputs.form({
   side: Inputs.range([1, 8], {value: 1, step: 1, label: "side (side² samples per pixel)"}),
   pattern: Inputs.radio(["regular", "jittered", "random", "Hammersley"], {value: "regular", label: "pattern"})
 }));
 ```
 
-```js echo
+```js
 {
   device.queue.writeBuffer(starUniforms, 0, new Uint32Array([starForm.side, ["regular", "jittered", "random", "Hammersley"].indexOf(starForm.pattern), 1, 0]));
   const encoder = device.createCommandEncoder();
@@ -1027,7 +1626,7 @@ const starForm = view(Inputs.form({
 }
 ```
 
-```js echo
+```js
 row(caption(`side = ${starForm.side}, ${starForm.pattern}`, starCanvas), caption("zoom near the center (×5)", starZoom))
 ```
 
@@ -1037,24 +1636,32 @@ push the aliasing inward but keep its structure. Jittered, random, and
 Hammersley samples turn it into **noise**, and jittered and Hammersley
 have less noise than random.
 
-### Quasi-random pixel samples
-
-The **Hammersley** option above computes the base-2 radical inverse by bit
-reversal, then shifts the shared pattern by a random offset per pixel, a
-**Cranley–Patterson rotation**. Without the shift, every pixel uses the
-same points, and the errors line up into visible patterns.
-
-```js echo
-const wgslHammersley = `
-fn hammersley(k: u32, N: u32) -> vec2<f32> {
-  return vec2<f32>(f32(k) / f32(N), f32(reverseBits(k) >> 8u) / 16777216.0);
-}`;
-```
-
 Hardware **MSAA** (`multisample: {count: 4}`) is a render-pipeline feature: a
 fixed rotated-grid pattern that antialiases triangle **edges**, shading once
 per pixel by default. Shader sampling lets you choose the pattern and shade
 every sample.
+
+### A jittered ray through a pixel
+
+To sample a ray-traced image, we need the same idea for rays. Module 10's
+`viewingRay(i, j, ...)` takes integer pixels, adds 0.5, and counts ${tex`j`}
+up. Sampling needs a ray through **any** point `q` of the image, given in pixel
+units with ${tex`y`} growing **down**. `Ray` and `cam` are the ray and camera
+from Module 10, and `trace` follows the ray into the scene. All three appear in
+the ambient occlusion example below. The `seed` is passed along for random
+bounce directions. Unlike Module 10, there is no `+ 0.5` because the jitter
+supplies the offset, and the flip of ${tex`y`} is continuous, ${tex`n_y - y`}.
+
+```js echo
+const wgslRadiance = `
+fn radiance(q: vec2<f32>, seed: ptr<function, u32>) -> vec3<f32> {
+  let dims = vec2<f32>(${aoWidth}.0, ${aoHeight}.0);
+  let us = cam.l + (cam.r - cam.l) * q.x / dims.x;
+  let vs = cam.b + (cam.t - cam.b) * (dims.y - q.y) / dims.y;
+  let d = normalize(-cam.dist * cam.w + us * cam.u + vs * cam.v);
+  return trace(Ray(cam.e, d), seed);
+}`;
+```
 
 ### Progressive accumulation
 
@@ -1065,41 +1672,109 @@ the noise falls as ${tex`1/\sqrt{k + 1}`}. The running mean
 ${tex`A_k = A_{k-1} + (c_k - A_{k-1})/(k+1)`} never stores a large sum, so
 it avoids the precision loss of adding small values to a large total.
 
-```js echo
-const wgslAccumulate = `
-@group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var<storage, read_write> accum: array<vec4<f32>>;   // A_k, one per pixel
+Before writing the shader, confirm the formula on the CPU. The running mean
+of 4, 2, and 6 should equal their ordinary mean, 4:
 
+```js echo
+[4, 2, 6].reduce((A, c, k) => A + (c - A) / (k + 1), 0)
+```
+
+On the GPU, the mean lives in a storage buffer, `accum`, with one `vec4` per
+pixel holding ${tex`A_k`}. The shader also reads four values from the host. `frame` drives the running mean,
+`seed` drives the random numbers, and `mode` and `rays` belong to the ambient
+occlusion example:
+
+```js echo
+const wgslAoParams = `
+struct Params { frame: u32, mode: u32, rays: u32, seed: u32 };
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read_write> accum: array<vec4<f32>>;`;
+```
+
+The update is the same formula. Frame 0 overwrites the old value instead of
+blending with it, so setting the frame back to 0 starts over and also clears
+any old NaNs:
+
+```js echo
+const wgslUpdateMean = `
+fn updateMean(i: u32, c: vec4<f32>) {
+  if (params.frame == 0u) { accum[i] = c; }
+  else { accum[i] += (c - accum[i]) / f32(params.frame + 1u); }
+}`;
+```
+
+A compute shader runs one invocation per pixel. Each one seeds its random
+stream from the pixel and frame, takes one jittered sample with `radiance`, and
+folds it into the mean. `id` holds the pixel's coordinates. The host dispatches
+enough 8 × 8 workgroups to cover the image, which can overshoot the edge, so
+the bounds check skips those extra invocations:
+
+```js echo
+const wgslComputeMain = `
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   if (id.x >= ${aoWidth}u || id.y >= ${aoHeight}u) { return; }
   var seed = pcg(id.x + pcg(id.y + pcg(params.seed)));
-  let c = vec4<f32>(radiance(vec2<f32>(id.xy) + vec2<f32>(rand(&seed), rand(&seed)), &seed), 1.0);   // c_k
-  let i = id.y * ${aoWidth}u + id.x;
-  if (params.frame == 0u) { accum[i] = c; }                                // start over: also clears old NaNs
-  else { accum[i] += (c - accum[i]) / f32(params.frame + 1u); }            // running mean
+  let q = vec2<f32>(id.xy) + vec2<f32>(rand(&seed), rand(&seed));
+  updateMean(id.y * ${aoWidth}u + id.x, vec4<f32>(radiance(q, &seed), 1.0));
 }`;
 ```
 
-On the host side, the buffer stays in floating point; only the displayed
-copy is clamped to 8 bits. Set the frame back to 0 when the camera, scene,
-or size changes, and recreate the buffer and bind groups when the size
-changes. The compute entry point writes the buffer as `read_write`, and the
-display entry point reads it as `read`. Each declares its own variable at
-binding 1, which WGSL allows because no single entry point uses both. Two
-explicit layouts describe the two views of the same buffer:
+A second pass displays the result. It reads the same buffer under the name
+`image`, then clamps and gamma-encodes each pixel for the screen:
 
 ```js echo
-const aoWidth = 400, aoHeight = 260;
+const wgslAoDisplay = `
+@group(0) @binding(1) var<storage, read> image: array<vec4<f32>>;
+@fragment
+fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
+  let c = image[u32(frag.y) * ${aoWidth}u + u32(frag.x)];
+  let shown = clamp(c.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+  return vec4<f32>(pow(shown, vec3<f32>(1.0 / 2.2)), 1.0);
+}`;
+```
+
+The compute entry point writes the buffer as `read_write`, and the display
+entry point reads it as `read`. Each declares its own variable at binding 1,
+which WGSL allows because no single entry point uses both.
+
+Module 10 let WebGPU infer its layouts with `layout: "auto"`. That would also
+work here, but writing the two layouts out makes the two views of the same
+buffer explicit:
+
+```js echo
 const aoComputeLayout = device.createBindGroupLayout({entries: [
-  {binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: {type: "uniform"}},
-  {binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: {type: "storage"}}
+  {binding: 0, visibility: GPUShaderStage.COMPUTE,
+   buffer: {type: "uniform"}},
+  {binding: 1, visibility: GPUShaderStage.COMPUTE,
+   buffer: {type: "storage"}}
 ]});
+```
+
+```js echo
 const aoDisplayLayout = device.createBindGroupLayout({entries: [
-  {binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: {type: "read-only-storage"}}
+  {binding: 1, visibility: GPUShaderStage.FRAGMENT,
+   buffer: {type: "read-only-storage"}}
 ]});
-const aoParams = device.createBuffer({size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
-const aoAccum = device.createBuffer({size: aoWidth * aoHeight * 16, usage: GPUBufferUsage.STORAGE});   // one vec4 per pixel
+```
+
+The storage buffer holds one `vec4` (16 bytes) per pixel, and the uniform buffer
+holds the four parameters. The buffer stays in floating point; only the displayed
+copy is clamped to 8 bits.
+
+```js echo
+const aoAccum = device.createBuffer({
+  size: aoWidth * aoHeight * 16, usage: GPUBufferUsage.STORAGE
+});
+const aoParams = device.createBuffer({
+  size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+});
+```
+
+Set the frame back to 0 when the camera, scene, or size changes, and recreate
+the buffer and bind groups when the size changes.
+
+```js
 const aoComputeBindGroup = device.createBindGroup({layout: aoComputeLayout, entries: [
   {binding: 0, resource: {buffer: aoParams}}, {binding: 1, resource: {buffer: aoAccum}}]});
 const aoDisplayBindGroup = device.createBindGroup({layout: aoDisplayLayout, entries: [{binding: 1, resource: {buffer: aoAccum}}]});
@@ -1117,22 +1792,31 @@ ${tex.block`AO = \frac1\pi\int_\Omega \text{vis}(\omega)\cos\theta\,d\omega \qqu
 With **cosine-weighted** directions (${tex`p = \cos\theta/\pi`}), the cosine
 cancels in ${tex`g/p`}, so the estimator is just the fraction of rays that
 escape. With **uniform** directions (${tex`p = 1/2\pi`}), each sample is
-${tex`2\,\text{vis}(\omega)\cos\theta`}, which varies more. A compute shader
-puts every piece together: `trace` finds the first hit, then shoots `rays`
-AO rays from it.
+${tex`2\,\text{vis}(\omega)\cos\theta`}, which varies more.
+
+A compute shader puts every piece together. The camera, ground plane, and
+sphere intersections come straight from Module 10, so that code is here for
+reference and collapsed. One detail matters later: `intersect` starts with
+`t = 1e30` as a "nothing hit yet" value, so a result of at least `1e29` means
+the ray missed everything.
 
 ```js echo
-const aoModule = device.createShaderModule({code: `${wgslRandom}${wgslWarps}${wgslRadiance}
-struct Params { frame: u32, mode: u32, rays: u32, seed: u32 };
+const wgslScene = `
 struct Ray { o: vec3<f32>, d: vec3<f32> };
-struct Camera { e: vec3<f32>, u: vec3<f32>, v: vec3<f32>, w: vec3<f32>, l: f32, r: f32, b: f32, t: f32, dist: f32 };
+struct Camera {
+  e: vec3<f32>, u: vec3<f32>, v: vec3<f32>, w: vec3<f32>,
+  l: f32, r: f32, b: f32, t: f32, dist: f32
+};
 
 const camE = vec3<f32>(0.0, 1.9, 4.2);
 const camW = normalize(camE - vec3<f32>(0.0, 0.5, 0.0));
 const camU = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), camW));
-const cam = Camera(camE, camU, cross(camW, camU), camW, ${-0.55 * aoWidth / aoHeight}, ${0.55 * aoWidth / aoHeight}, -0.55, 0.55, 1.0);
+const cam = Camera(
+  camE, camU, cross(camW, camU), camW,
+  ${-0.55 * aoWidth / aoHeight}, ${0.55 * aoWidth / aoHeight},
+  -0.55, 0.55, 1.0);
 
-const SPHERES = array<vec4<f32>, 4>(                      // center xyz, radius
+const SPHERES = array<vec4<f32>, 4>(   // center xyz, radius
   vec4<f32>(0.0, 1.0, 0.0, 1.0), vec4<f32>(-1.7, 0.5, 0.7, 0.5),
   vec4<f32>(1.6, 0.7, -0.5, 0.7), vec4<f32>(0.9, 0.25, 1.3, 0.25));
 
@@ -1140,7 +1824,7 @@ struct Hit { t: f32, n: vec3<f32> };
 
 fn intersect(o: vec3<f32>, d: vec3<f32>) -> Hit {
   var best = Hit(1e30, vec3<f32>(0.0));
-  if (d.y < 0.0) {                                          // ground plane y = 0
+  if (d.y < 0.0) {   // ground plane y = 0
     let t = -o.y / d.y;
     if (t > 1e-4) { best = Hit(t, vec3<f32>(0.0, 1.0, 0.0)); }
   }
@@ -1151,49 +1835,90 @@ fn intersect(o: vec3<f32>, d: vec3<f32>) -> Hit {
     let disc = b * b - (dot(oc, oc) - s.w * s.w);
     if (disc > 0.0) {
       let t = -b - sqrt(disc);
-      if (t > 1e-4 && t < best.t) { best = Hit(t, normalize(o + t * d - s.xyz)); }
+      if (t > 1e-4 && t < best.t) {
+        best = Hit(t, normalize(o + t * d - s.xyz));
+      }
     }
   }
   return best;
 }
 
-fn occluded(o: vec3<f32>, d: vec3<f32>) -> bool {          // Module 10's shadow test, t1 = ∞
+// Module 10's shadow test, with t1 = ∞
+fn occluded(o: vec3<f32>, d: vec3<f32>) -> bool {
   return intersect(o, d).t < 1e29;
-}
+}`;
+```
 
-fn sampleDirection(xi: vec2<f32>, mode: u32) -> vec4<f32> {  // xyz = local direction, w = g/p when visible
+Now the sampling. `sampleDirection` returns a local direction in `xyz`, and in
+`w` the value of ${tex`g/p`} for a visible direction. The uniform case draws
+${tex`\cos\theta = \xi_2`} (Archimedes' result that height on a sphere is
+uniform), and its `w` is ${tex`(\cos\theta/\pi) / (1/2\pi) = 2\cos\theta`}.
+
+```js echo
+const wgslSampleDirection = `
+fn sampleDirection(xi: vec2<f32>, mode: u32) -> vec4<f32> {
   if (mode == 0u) { return vec4<f32>(sampleCosineHemisphere(xi), 1.0); }
-  let phi = 2.0 * PI * xi.x;                                 // uniform: pdf = 1 / 2π
+  let phi = 2.0 * PI * xi.x;
   let s = sqrt(1.0 - xi.y * xi.y);
-  return vec4<f32>(cos(phi) * s, sin(phi) * s, xi.y, 2.0 * xi.y);  // (cos θ / π) / (1 / 2π) = 2 cos θ
-}
+  return vec4<f32>(cos(phi) * s, sin(phi) * s, xi.y, 2.0 * xi.y);
+}`;
+```
 
+One AO sample uses three earlier ideas. It draws a canonical pair, warps it to
+a local direction, and rotates it around the normal with `toWorld`. Then it
+fires a shadow ray from just above the surface, the small offset that avoids
+hitting the surface itself. An occluded ray scores 0, and a visible one scores
+its ${tex`g/p`}:
+
+```js echo
+const wgslAoSample = `
+fn aoSample(pos: vec3<f32>, n: vec3<f32>, seed: ptr<function, u32>) -> f32 {
+  let s = sampleDirection(vec2<f32>(rand(seed), rand(seed)), params.mode);
+  let d = toWorld(s.xyz, n);
+  return select(s.w, 0.0, occluded(pos + 1e-3 * n, d));
+}`;
+```
+
+Averaging `rays` of those samples at one point is the Monte Carlo estimator once
+more, now with a visibility integrand:
+
+```js echo
+const wgslAverageAo = `
+fn averageAo(pos: vec3<f32>, n: vec3<f32>, seed: ptr<function, u32>) -> f32 {
+  var open = 0.0;
+  for (var k = 0u; k < params.rays; k++) { open += aoSample(pos, n, seed); }
+  return open / f32(params.rays);
+}`;
+```
+
+`trace` finds the first hit from the camera and estimates AO at that point. A
+ray that misses everything sees the light gray background:
+
+```js echo
+const wgslTrace = `
 fn trace(ray: Ray, seed: ptr<function, u32>) -> vec3<f32> {
   let hit = intersect(ray.o, ray.d);
-  if (hit.t >= 1e29) { return vec3<f32>(0.75); }             // background
-  let pos = ray.o + hit.t * ray.d;
-  var open = 0.0;
-  for (var k = 0u; k < params.rays; k++) {
-    let s = sampleDirection(vec2<f32>(rand(seed), rand(seed)), params.mode);
-    let d = toWorld(s.xyz, hit.n);
-    open += select(s.w, 0.0, occluded(pos + 1e-3 * hit.n, d));  // vis(ω) × g/p factor
-  }
-  return vec3<f32>(open / f32(params.rays));
-}
-${wgslAccumulate}
+  if (hit.t >= 1e29) { return vec3<f32>(0.75); }
+  return vec3<f32>(averageAo(ray.o + hit.t * ray.d, hit.n, seed));
+}`;
+```
 
-// Display pass: read the running mean.
-@group(0) @binding(1) var<storage, read> image: array<vec4<f32>>;
-@vertex
-fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
-  var pos = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
-  return vec4<f32>(pos[i], 0.0, 1.0);
-}
-@fragment
-fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
-  let c = image[u32(frag.y) * ${aoWidth}u + u32(frag.x)];
-  return vec4<f32>(pow(clamp(c.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / 2.2)), 1.0);
-}`});
+All the pieces now join into one shader, which holds both the compute entry
+point and the display entry points:
+
+```js echo
+const aoShader = [wgslRandom, wgslWarps, wgslAoParams, wgslScene,
+  wgslRadiance, wgslSampleDirection, wgslAoSample, wgslAverageAo, wgslTrace,
+  wgslUpdateMean, wgslComputeMain, wgslFullscreenVertex, wgslAoDisplay
+].join("\n");
+```
+
+```js
+showShader(aoShader)
+```
+
+```js
+const aoModule = device.createShaderModule({code: aoShader});
 const aoComputePipeline = device.createComputePipeline({
   layout: device.createPipelineLayout({bindGroupLayouts: [aoComputeLayout]}),
   compute: {module: aoModule, entryPoint: "main"}
@@ -1211,7 +1936,87 @@ const {context: aoContext} = await initializeWebGPU(aoCanvas, {device});
 const aoStatus = html`<pre style="margin:4px 0"></pre>`;
 ```
 
+On the host side, one frame has two passes in a single command encoder. The
+compute pass adds one sample per pixel, and the render pass shows the running
+mean. `aoComputePipeline`, `aoDisplayPipeline`, and their bind groups are built
+from the shader and layouts above in the usual way.
+
 ```js echo
+function renderAoFrame(params) {
+  device.queue.writeBuffer(aoParams, 0, params);
+  const encoder = device.createCommandEncoder();
+  accumulatePass(encoder);
+  displayPass(encoder);
+  device.queue.submit([encoder.finish()]);
+}
+```
+
+The compute pass is where the workgroup count comes from: each workgroup covers
+8 × 8 pixels, so we round up to cover the whole image.
+
+```js echo
+function accumulatePass(encoder) {
+  const pass = encoder.beginComputePass();
+  pass.setPipeline(aoComputePipeline);
+  pass.setBindGroup(0, aoComputeBindGroup);
+  pass.dispatchWorkgroups(Math.ceil(aoWidth / 8), Math.ceil(aoHeight / 8));
+  pass.end();
+}
+```
+
+The render pass draws the full-screen triangle:
+
+```js echo
+function displayPass(encoder) {
+  const target = aoContext.getCurrentTexture().createView();
+  const pass = encoder.beginRenderPass({
+    colorAttachments: [{view: target, loadOp: "clear", storeOp: "store"}]
+  });
+  pass.setPipeline(aoDisplayPipeline);
+  pass.setBindGroup(0, aoDisplayBindGroup);
+  pass.draw(3);
+  pass.end();
+}
+```
+
+Each frame, the host fills in the four uniform values. The seed changes **every**
+frame. If it stayed the same, each frame would repeat the same samples and the
+image would never improve.
+
+```js echo
+const aoParamsFor = (form, frame, total) => new Uint32Array([
+  frame,                                             // params.frame
+  form.mode === "cosine-weighted" ? 0 : 1,           // params.mode
+  form.rays,                                         // params.rays
+  total + 1                                          // params.seed
+]);
+```
+
+The frame loop ties this together, with two counters. `total` counts every
+frame drawn and supplies the seed. `frame` counts the samples in the mean, and
+with accumulation off it stays 0, so each frame replaces the mean. Observable
+reruns this cell when a control below changes, which restarts the counters, and
+`invalidation` stops the old loop.
+
+```js echo
+{
+  let frame = 0, total = 0, running = true;
+  invalidation.then(() => (running = false));
+  function step() {
+    if (!running || total >= aoForm.maxFrames) return;
+    renderAoFrame(aoParamsFor(aoForm, frame, total));
+    total++;
+    if (aoForm.accumulate) frame++;
+    aoStatus.textContent = aoForm.accumulate
+      ? `${frame} samples per pixel (noise ∝ 1/√${frame})`
+      : `1 sample per pixel, new seed each frame`;
+    requestAnimationFrame(step);
+  }
+  step();
+}
+```
+
+```js
 const aoForm = view(Inputs.form({
   mode: Inputs.radio(["cosine-weighted", "uniform hemisphere"], {value: "cosine-weighted", label: "AO directions"}),
   rays: Inputs.range([1, 16], {value: 1, step: 1, label: "AO rays per sample (N)"}),
@@ -1220,37 +2025,7 @@ const aoForm = view(Inputs.form({
 }));
 ```
 
-```js echo
-{
-  // Re-running this cell (any control change) restarts the running mean at frame 0.
-  let frame = 0, total = 0, running = true;
-  invalidation.then(() => (running = false));
-  function step() {
-    if (!running || total >= aoForm.maxFrames) return;
-    // Without accumulation, frame stays 0, so each frame replaces the mean. The seed always changes.
-    device.queue.writeBuffer(aoParams, 0, new Uint32Array([aoForm.accumulate ? frame : 0, aoForm.mode === "cosine-weighted" ? 0 : 1, aoForm.rays, total + 1]));
-    const encoder = device.createCommandEncoder();
-    const compute = encoder.beginComputePass();
-    compute.setPipeline(aoComputePipeline);
-    compute.setBindGroup(0, aoComputeBindGroup);
-    compute.dispatchWorkgroups(Math.ceil(aoWidth / 8), Math.ceil(aoHeight / 8));
-    compute.end();
-    const pass = encoder.beginRenderPass({colorAttachments: [{view: aoContext.getCurrentTexture().createView(), clearValue: {r: 0, g: 0, b: 0, a: 1}, loadOp: "clear", storeOp: "store"}]});
-    pass.setPipeline(aoDisplayPipeline);
-    pass.setBindGroup(0, aoDisplayBindGroup);
-    pass.draw(3);
-    pass.end();
-    device.queue.submit([encoder.finish()]);
-    total++;
-    if (aoForm.accumulate) frame++;
-    aoStatus.textContent = aoForm.accumulate ? `${frame} samples per pixel (noise ∝ 1/√${frame})` : `1 sample per pixel, new seed each frame`;
-    requestAnimationFrame(step);
-  }
-  step();
-}
-```
-
-```js echo
+```js
 html`<div>${aoCanvas}${aoStatus}</div>`
 ```
 

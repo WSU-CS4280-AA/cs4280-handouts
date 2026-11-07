@@ -3,7 +3,7 @@ title: Module 10 — Ray Tracing
 toc: true
 ---
 
-```js echo
+```js
 import * as vec3 from "./lib/math/vec3.js";
 import {initializeWebGPU} from "./lib/webgpu.js";
 import {plane, drawPoint, dragPoints} from "./components/vectorField.js";
@@ -21,7 +21,8 @@ bounding boxes, shading, shadows, and mirror reflection). It then builds
 a **progressive** CPU tracer, with two-sided surfaces and an image that
 fills in a few rows per frame through WebGPU, and finally moves the
 algorithm to a WebGPU compute shader. The WebGPU sections need
-**Chrome or Edge 113+**. This handout teaches the
+**Chrome or Edge 113+**. The code is part of the reading: each step is built and tested
+here, while the code that only draws the demos stays out of sight. This handout teaches the
 *techniques*; it is not a walkthrough of any graded assignment.
 
 ## Image-Order Rendering
@@ -53,22 +54,55 @@ view direction and an up vector:
 
 ```js echo
 function cameraFrame(eye, target, up = [0, 1, 0]) {
-  const w = vec3.normalize(vec3.sub(eye, target));     // backward: the camera looks along −w
-  const u = vec3.normalize(vec3.cross(up, w));         // right
-  const v = vec3.cross(w, u);                          // true up: in the plane of up and w
+  const w = vec3.normalize(vec3.sub(eye, target));   // backward
+  const u = vec3.normalize(vec3.cross(up, w));       // right
+  const v = vec3.cross(w, u);                        // true up
   return {e: eye, u, v, w};
 }
+```
 
-// Pixel (i, j) → its center (u, v) on the image rectangle [l, r] × [b, t].
-const pixelUV = ({l, r, b, t}, i, j, nx, ny) => [l + (r - l) * (i + 0.5) / nx, b + (t - b) * (j + 0.5) / ny];
+A camera at ${tex`z = 5`} looking at the origin should get the standard axes, with
+${tex`\mathbf w = (0, 0, 1)`} pointing back toward it:
 
+```js echo
+Object.values(cameraFrame([0, 0, 5], [0, 0, 0])).slice(1)
+  .map((axis) => axis.join(", "))
+```
+
+Each pixel's center lies on the image rectangle ${tex`[l, r] \times [b, t]`}. The
+${tex`+0.5`} moves from the pixel's corner to its center:
+
+```js echo
+const pixelUV = ({l, r, b, t}, i, j, nx, ny) => [
+  l + (r - l) * (i + 0.5) / nx,
+  b + (t - b) * (j + 0.5) / ny
+];
+```
+
+On a window from −1 to 1 with 2 × 2 pixels, the first pixel's center should be at
+(−0.5, −0.5):
+
+```js echo
+pixelUV({l: -1, r: 1, b: -1, t: 1}, 0, 0, 2, 2)
+```
+
+That point in the image gives the ray. A perspective ray starts at the eye and passes through
+the point, which lies a distance ${tex`d`} along ${tex`-\mathbf w`}. An orthographic ray starts at
+the point, and every such ray runs in the same direction:
+
+```js echo
 function viewingRay(cam, i, j, nx, ny) {
   const [us, vs] = pixelUV(cam, i, j, nx, ny);
   const offset = vec3.add(vec3.scale(cam.u, us), vec3.scale(cam.v, vs));
   return cam.perspective
-    ? {o: cam.e, d: vec3.add(vec3.scale(cam.w, -cam.d), offset)}   // shared origin
-    : {o: vec3.add(cam.e, offset), d: vec3.scale(cam.w, -1)};       // shared direction
+    ? {o: cam.e, d: vec3.add(vec3.scale(cam.w, -cam.d), offset)}
+    : {o: vec3.add(cam.e, offset), d: vec3.scale(cam.w, -1)};
 }
+```
+
+Finally, a small function evaluates a ray at ${tex`t`}:
+
+```js echo
 const at = (ray, t) => vec3.add(ray.o, vec3.scale(ray.d, t));
 ```
 
@@ -78,7 +112,7 @@ A top view of the same idea: the eye sits at the bottom, the image
 rectangle (with ${tex`n_x`} pixel centers) is a distance ${tex`d`} in
 front of it, and each ray stops at the first circle it hits.
 
-```js echo
+```js
 const rayFanForm = view(Inputs.form({
   kind: Inputs.radio(["perspective", "orthographic", "oblique"], {value: "perspective", label: "projection"}),
   nx: Inputs.range([3, 24], {value: 9, step: 1, label: "pixels nₓ"}),
@@ -86,7 +120,7 @@ const rayFanForm = view(Inputs.form({
 }));
 ```
 
-```js echo
+```js
 (() => {
   const scene = plane({width: 380, height: 380, domain: 4.6});
   const eye = {x: 0, y: -4}, half = 1.6;                       // camera looks along +y, so −w = (0, 1)
@@ -142,31 +176,46 @@ ${tex`[t_0, t_1]`}, else the larger one:
 ```js echo
 function hitSphereT(ray, center, radius, t0, t1) {
   const ec = vec3.sub(ray.o, center);
-  const A = vec3.dot(ray.d, ray.d), B = vec3.dot(ray.d, ec), C = vec3.dot(ec, ec) - radius * radius;
+  const A = vec3.dot(ray.d, ray.d);
+  const B = vec3.dot(ray.d, ec);
+  const C = vec3.dot(ec, ec) - radius * radius;
   const disc = B * B - A * C;
-  if (disc < 0) return Infinity;                        // miss: no more work
+  if (disc < 0) return Infinity;              // miss: no more work
   const sq = Math.sqrt(disc);
-  let t = (-B - sq) / A;                                // smaller root first
+  let t = (-B - sq) / A;                      // smaller root first
   if (t < t0 || t > t1) t = (-B + sq) / A;
   return t < t0 || t > t1 ? Infinity : t;
 }
 ```
 
+A debugging case with a known answer: a ray from (1, 1, 1) toward the center of the unit sphere
+should first hit it at ${tex`t = 1 - \sqrt3/3 \approx 0.4226`}:
+
 ```js echo
-html`<pre>debug case: e = (1, 1, 1), d = (−1, −1, −1), unit sphere at the origin
-  first hit  t = ${hitSphereT({o: [1, 1, 1], d: [-1, -1, -1]}, [0, 0, 0], 1, 0, Infinity).toFixed(4)}   (expected 1 − √3/3 ≈ 0.4226)
-  from inside (t₀ = 0.5): t = ${hitSphereT({o: [1, 1, 1], d: [-1, -1, -1]}, [0, 0, 0], 1, 0.5, Infinity).toFixed(4)}   (expected 1 + √3/3 ≈ 1.5774)</pre>`
+const towardCenter = {o: [1, 1, 1], d: [-1, -1, -1]};
+```
+
+```js echo
+hitSphereT(towardCenter, [0, 0, 0], 1, 0, Infinity)
+```
+
+If we only accept ${tex`t \ge 0.5`}, as for a ray that starts inside the sphere, the first root is
+out of range. So we should get the larger root, ${tex`1 + \sqrt3/3 \approx 1.5774`}:
+
+```js echo
+hitSphereT(towardCenter, [0, 0, 0], 1, 0.5, Infinity)
 ```
 
 Drag the ray's origin **e** and the point **e + d** to see the three
 cases of the discriminant:
 
-```js echo
+```js
 const discWidget = dragPoints({"e": {x: -3.2, y: -1.4}, "e + d": {x: -1.6, y: -0.6}}, {width: 380, height: 380, domain: 4, colors: ["crimson", "orange"]});
 const discPts = view(discWidget);
 ```
 
-```js echo
+```js
+{
 discWidget.redecorate((scene) => {
   const c = {x: 0.6, y: 0.4}, R = 1.5, e = discPts["e"], dpt = discPts["e + d"];
   const d = {x: dpt.x - e.x, y: dpt.y - e.y};
@@ -182,7 +231,8 @@ discWidget.redecorate((scene) => {
     });
   }
   scene.svg.append("text").attr("x", 10).attr("y", 20).attr("font-size", 13).attr("font-family", "var(--sans-serif)").attr("fill", "currentColor").text(label);
-})
+});
+}
 ```
 
 Move **e** inside the circle: the smaller root becomes negative (behind
@@ -197,15 +247,19 @@ rule solves it with shared subterms, and the test **terminates early**:
 compute ${tex`t`}, then ${tex`\gamma`}, then ${tex`\beta`}, rejecting as
 soon as one is out of range.
 
+The names below follow the reading: the matrix columns are ${tex`(a, b, c) = A - B`},
+${tex`(d, e, f) = A - C`}, and ${tex`(g, h, i) = \mathbf d`}, and the right-hand side is
+${tex`(j, k, l) = A - \mathbf e`}. The products that Cramer's rule needs repeatedly are computed
+once, and notice how each test can stop the work early:
+
 ```js echo
 function hitTriangle(ray, A, B, C, t0, t1) {
-  // Column by column, as in the reading: (a, b, c) = A − B, (d, e, f) = A − C, (g, h, i) = d.
-  const [a, b, c] = vec3.sub(A, B), [d, e, f] = vec3.sub(A, C), [g, h, i] = ray.d;
-  const [j, k, l] = vec3.sub(A, ray.o);
+  const [a, b, c] = vec3.sub(A, B), [d, e, f] = vec3.sub(A, C);
+  const [g, h, i] = ray.d, [j, k, l] = vec3.sub(A, ray.o);
   const eihf = e * i - h * f, gfdi = g * f - d * i, dheg = d * h - e * g;
   const akjb = a * k - j * b, jcal = j * c - a * l, blkc = b * l - k * c;
   const M = a * eihf + b * gfdi + c * dheg;
-  if (Math.abs(M) < 1e-12) return null;                       // parallel to the plane
+  if (Math.abs(M) < 1e-12) return null;       // parallel to the plane
   const t = -(f * akjb + e * jcal + d * blkc) / M;
   if (t < t0 || t > t1) return null;
   const gamma = (i * akjb + h * jcal + g * blkc) / M;
@@ -216,13 +270,11 @@ function hitTriangle(ray, A, B, C, t0, t1) {
 }
 ```
 
+The same ray from before aims at the center of the triangle (1, 0, 0), (0, 1, 0), (0, 0, 1). It
+should hit at ${tex`t = \tfrac23`} with ${tex`\beta = \gamma = \tfrac13`}:
+
 ```js echo
-(() => {
-  const h = hitTriangle({o: [1, 1, 1], d: [-1, -1, -1]}, [1, 0, 0], [0, 1, 0], [0, 0, 1], 0, Infinity);
-  return html`<pre>debug case: e = (1, 1, 1), d = (−1, −1, −1), triangle (1,0,0), (0,1,0), (0,0,1)
-  t = ${h.t.toFixed(4)}, β = ${h.beta.toFixed(4)}, γ = ${h.gamma.toFixed(4)}   (expected 2/3, 1/3, 1/3)
-  hit point = (${at({o: [1, 1, 1], d: [-1, -1, -1]}, h.t).map((v) => v.toFixed(4)).join(", ")})</pre>`;
-})()
+hitTriangle(towardCenter, [1, 0, 0], [0, 1, 0], [0, 0, 1], 0, Infinity)
 ```
 
 ### Surfaces, hit records, and groups
@@ -234,32 +286,58 @@ only closer surfaces can win.
 
 ```js echo
 class Sphere {
-  constructor(center, radius, material) { Object.assign(this, {center, radius, material}); }
+  constructor(center, radius, material) {
+    Object.assign(this, {center, radius, material});
+  }
   hit(ray, t0, t1) {
     const t = hitSphereT(ray, this.center, this.radius, t0, t1);
     if (t === Infinity) return null;
     const p = at(ray, t);
-    return {t, p, n: vec3.scale(vec3.sub(p, this.center), 1 / this.radius), surface: this};
+    const n = vec3.scale(vec3.sub(p, this.center), 1 / this.radius);
+    return {t, p, n, surface: this};
   }
 }
+```
+
+A triangle wraps `hitTriangle` the same way. Its normal comes from the cross product of two edges,
+so it is the same at every point of the triangle:
+
+```js echo
 class Triangle {
-  constructor(a, b, c, material) { Object.assign(this, {a, b, c, material}); this.normal = vec3.normalize(vec3.cross(vec3.sub(b, a), vec3.sub(c, a))); }
+  constructor(a, b, c, material) {
+    Object.assign(this, {a, b, c, material});
+    this.normal = vec3.normalize(vec3.cross(vec3.sub(b, a), vec3.sub(c, a)));
+  }
   hit(ray, t0, t1) {
     const h = hitTriangle(ray, this.a, this.b, this.c, t0, t1);
-    return h && {t: h.t, p: at(ray, h.t), n: this.normal, beta: h.beta, gamma: h.gamma, surface: this};
+    return h && {...h, p: at(ray, h.t), n: this.normal, surface: this};
   }
 }
+```
+
+A group holds other surfaces and is itself a surface. After each hit, it shrinks `t1` so that later
+surfaces only count if they are closer:
+
+```js echo
 class Group {
   constructor(surfaces) { this.surfaces = surfaces; }
   hit(ray, t0, t1) {
     let closest = null;
     for (const s of this.surfaces) {
       const rec = s.hit(ray, t0, t1);
-      if (rec) { closest = rec; t1 = rec.t; }               // shrink the interval
+      if (rec) { closest = rec; t1 = rec.t; }
     }
     return closest;
   }
 }
+```
+
+Two spheres on a line test the order independence. The ray from the origin along ${tex`+z`} should
+report the nearer sphere's surface, at ${tex`t = 4`}, even though it is listed second:
+
+```js echo
+new Group([new Sphere([0, 0, 9], 1), new Sphere([0, 0, 5], 1)])
+  .hit({o: [0, 0, 0], d: [0, 0, 1]}, 0, Infinity).t
 ```
 
 ### Boxes with the slab method
@@ -275,12 +353,13 @@ ${tex`t_{\text{far}}`}, the smallest exit. A ray that starts **inside**
 the box has ${tex`t_{\text{near}} < 0`} and hits where it leaves, at
 ${tex`t_{\text{far}}`}. Drag **e** inside the box to see it:
 
-```js echo
+```js
 const slabWidget = dragPoints({"e": {x: -3.4, y: -1.6}, "e + d": {x: -2.2, y: -1.1}}, {width: 380, height: 380, domain: 4, colors: ["crimson", "orange"]});
 const slabPts = view(slabWidget);
 ```
 
-```js echo
+```js
+{
 slabWidget.redecorate((scene) => {
   const min = {x: -1, y: -1.2}, max = {x: 1.8, y: 1}, e = slabPts["e"], q = slabPts["e + d"];
   const d = {x: q.x - e.x, y: q.y - e.y}, far = 20;
@@ -305,6 +384,7 @@ slabWidget.redecorate((scene) => {
   }
   scene.svg.append("text").attr("x", 10).attr("y", 20).attr("font-size", 13).attr("font-family", "var(--sans-serif)").attr("fill", "currentColor").text(label);
 });
+}
 ```
 
 In code, the three intervals come from one loop. Multiplying by
@@ -314,16 +394,23 @@ exactly on a slab plane, ${tex`0\cdot\infty`} is NaN, which
 `Math.max` passes along, so the overlap test treats NaN as a miss:
 
 ```js echo
-function boxInterval(ray, min, max) {                            // [tNear, tFar], or null if the slabs don't overlap
+function boxInterval(ray, min, max) {
   let tNear = -Infinity, tFar = Infinity;
   for (let k = 0; k < 3; k++) {
-    const inv = 1 / ray.d[k];                                    // ±Infinity for a ray parallel to the slab
+    const inv = 1 / ray.d[k];
     const a = (min[k] - ray.o[k]) * inv, b = (max[k] - ray.o[k]) * inv;
-    tNear = Math.max(tNear, Math.min(a, b));                     // the last slab the ray enters
-    tFar = Math.min(tFar, Math.max(a, b));                       // the first slab it leaves
+    tNear = Math.max(tNear, Math.min(a, b));   // the last slab it enters
+    tFar = Math.min(tFar, Math.max(a, b));     // the first slab it leaves
   }
-  return tNear <= tFar ? [tNear, tFar] : null;                   // false for NaN too: a miss
+  return tNear <= tFar ? [tNear, tFar] : null; // false for NaN too: a miss
 }
+```
+
+A ray along ${tex`+x`} from ${tex`x = -3`} through a box spanning ${tex`\pm 1`} should enter at
+${tex`t = 2`} and leave at ${tex`t = 4`}:
+
+```js echo
+boxInterval({o: [-3, 0, 0], d: [1, 0, 0]}, [-1, -1, -1], [1, 1, 1])
 ```
 
 As a surface, the box also returns the **normal of the face that was
@@ -335,22 +422,32 @@ beyond a closer hit (or beyond the light, for a shadow ray) would still
 count.
 
 ```js echo
-function hitBox(ray, min, max, t0 = 1e-4, t1 = Infinity) {
-  const iv = boxInterval(ray, min, max);
-  if (!iv) return null;
-  const [tNear, tFar] = iv;
-  const t = tNear > t0 ? tNear : tFar;                           // from inside: where the ray leaves
-  if (t <= t0 || t > t1) return null;                            // behind the ray, or beyond t1
-  const p = at(ray, t);
-  const offset = [0, 1, 2].map((k) => (p[k] - (min[k] + max[k]) / 2) / ((max[k] - min[k]) / 2));
-  const axis = [0, 1, 2].reduce((best, k) => (Math.abs(offset[k]) > Math.abs(offset[best]) ? k : best), 0);
-  const n = [0, 0, 0];
-  n[axis] = Math.sign(offset[axis]);                             // points out of the box
-  return {t, n};
+function faceNormal(p, min, max) {
+  const offset = [0, 1, 2].map(
+    (k) => (p[k] - (min[k] + max[k]) / 2) / ((max[k] - min[k]) / 2)
+  );
+  const axis = d3.maxIndex(offset, Math.abs);
+  return [0, 1, 2].map((k) => (k === axis ? Math.sign(offset[k]) : 0));
 }
 ```
 
+A hit picks ${tex`t_{\text{near}}`} when it is in front of the ray. Otherwise the ray started
+inside, and the hit is where it leaves:
+
 ```js echo
+function hitBox(ray, min, max, t0 = 1e-4, t1 = Infinity) {
+  const iv = boxInterval(ray, min, max);
+  if (!iv) return null;
+  const t = iv[0] > t0 ? iv[0] : iv[1];
+  if (t <= t0 || t > t1) return null;    // behind the ray, or beyond t1
+  return {t, n: faceNormal(at(ray, t), min, max)};
+}
+```
+
+Here are several debugging cases, including a ray from inside and a shadow ray stopped by
+${tex`t_1`}:
+
+```js
 (() => {
   const show = (h) => (h ? `t = ${h.t.toFixed(3)}, n = (${h.n.join(", ")})` : "no hit");
   const inside = {o: [0.5, 0.5, 0.5], d: [1, 0, 0]}, hIn = hitBox(inside, [0, 0, 0], [1, 1, 1]);
@@ -385,8 +482,46 @@ the bounding test uses the **interval overlap**
 ${tex`t_{\text{far}} \ge t_0`}, ${tex`t_{\text{near}} \le t_1`}), not
 `hitBox`'s single surface hit.
 
+A mesh's box is the smallest and largest of its vertex coordinates, per axis:
+
 ```js echo
-function sphereMesh(c, R, rings, material) {                        // a sphere as 4·rings² − 4·rings flat triangles
+function meshBounds(triangles) {
+  const pts = triangles.flatMap((tr) => [tr.a, tr.b, tr.c]);
+  const along = (k) => pts.map((p) => p[k]);
+  return {
+    min: [0, 1, 2].map((k) => Math.min(...along(k))),
+    max: [0, 1, 2].map((k) => Math.max(...along(k)))
+  };
+}
+```
+
+`BoundedMesh` is a surface, like `Sphere` and `Group`. It tests its one box first and only then visits
+its triangles. The overlap test is also true for a ray that starts inside. The two counters are only
+for the demo below:
+
+```js echo
+class BoundedMesh {
+  constructor(triangles) {
+    this.triangles = new Group(triangles);
+    Object.assign(this, meshBounds(triangles));
+    this.useBox = true;
+    this.rays = 0; this.tests = 0;
+  }
+  hit(ray, t0, t1) {
+    this.rays++;
+    if (this.useBox) {
+      const iv = boxInterval(ray, this.min, this.max);
+      if (!iv || iv[1] < t0 || iv[0] > t1) return null;
+    }
+    this.tests += this.triangles.surfaces.length;
+    return this.triangles.hit(ray, t0, t1);
+  }
+}
+```
+
+```js
+// a sphere as 4·rings² − 4·rings flat triangles
+function sphereMesh(c, R, rings, material) {
   const nu = 2 * rings, nv = rings;
   const P = (i, j) => {
     const th = (Math.PI * j) / nv, ph = (2 * Math.PI * i) / nu;
@@ -395,45 +530,24 @@ function sphereMesh(c, R, rings, material) {                        // a sphere 
   const tris = [];
   for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
     const a = P(i, j), b = P(i + 1, j), cc = P(i + 1, j + 1), d = P(i, j + 1);
-    if (j > 0) tris.push(new Triangle(a, b, cc, material));         // skip the degenerate triangle at the top pole
-    if (j < nv - 1) tris.push(new Triangle(a, cc, d, material));    // ... and at the bottom pole
+    if (j > 0) tris.push(new Triangle(a, b, cc, material));
+    if (j < nv - 1) tris.push(new Triangle(a, cc, d, material));
   }
   return tris;
 }
-
-class BoundedMesh {                                                 // a Surface, like Sphere, Triangle, and Group
-  constructor(triangles) {
-    this.triangles = new Group(triangles);
-    const pts = triangles.flatMap((tr) => [tr.a, tr.b, tr.c]);
-    this.min = [0, 1, 2].map((k) => Math.min(...pts.map((p) => p[k])));
-    this.max = [0, 1, 2].map((k) => Math.max(...pts.map((p) => p[k])));
-    this.useBox = true;
-    this.rays = 0; this.tests = 0;                                  // counters for the demo
-  }
-  hit(ray, t0, t1) {
-    this.rays++;
-    if (this.useBox) {
-      const iv = boxInterval(ray, this.min, this.max);
-      if (!iv || iv[1] < t0 || iv[0] > t1) return null;             // overlap test: also true for a ray that starts inside
-    }
-    this.tests += this.triangles.surfaces.length;
-    return this.triangles.hit(ray, t0, t1);
-  }
-}
 ```
 
-The mesh below sits on the floor and is rendered with the shading code
-from the next section. Each ray that reaches the mesh, primary or shadow,
-is counted:
+The mesh below, a sphere made of flat triangles, sits on the floor and is rendered with the shading
+code from the next section. Each ray that reaches the mesh, primary or shadow, is counted:
 
-```js echo
+```js
 const bboxForm = view(Inputs.form({
   useBox: Inputs.toggle({value: true, label: "test the bounding box first"}),
   rings: Inputs.range([4, 16], {value: 10, step: 1, label: "mesh rings"})
 }));
 ```
 
-```js echo
+```js
 (() => {
   const mesh = new BoundedMesh(sphereMesh([0, 1, 0], 1, bboxForm.rings, material({kd: [0.25, 0.45, 0.8], ks: 0.4})));
   mesh.useBox = bboxForm.useBox;
@@ -494,16 +608,42 @@ reflection **recurses** along
 ${tex`\mathbf r = \mathbf d - 2(\mathbf d\cdot\mathbf n)\mathbf n`},
 weighted by the color ${tex`k_m`}, up to a maximum depth.
 
+A checker pattern gives the floor some detail. Adding the floored coordinates and testing the lowest
+bit alternates between two colors:
+
 ```js echo
-const checker = (p) => ((Math.floor(p[0]) + Math.floor(p[2])) & 1 ? [0.75, 0.75, 0.72] : [0.25, 0.25, 0.3]);
-function material({kd = [0.7, 0.7, 0.7], ks = 0.3, shininess = 60, km = [0, 0, 0], texture = null} = {}) {
-  return {kd, ks, shininess, km, texture,
-    evaluate(l, v, n, p) {                                    // Blinn–Phong reflectance k
-      const h = vec3.normalize(vec3.add(l, v));
-      const spec = this.ks * Math.max(0, vec3.dot(n, h)) ** this.shininess;
-      return (this.texture ? this.texture(p) : this.kd).map((c) => c + spec);
-    }};
+const checker = (p) => (Math.floor(p[0]) + Math.floor(p[2])) & 1
+  ? [0.75, 0.75, 0.72] : [0.25, 0.25, 0.3];
+```
+
+A material bundles the coefficients with `evaluate`, the Blinn–Phong reflectance ${tex`k`} for given
+light, view, and normal directions:
+
+```js echo
+function material({
+  kd = [0.7, 0.7, 0.7], ks = 0.3, shininess = 60,
+  km = [0, 0, 0], texture = null
+} = {}) {
+  const evaluate = (l, v, n, p) => {
+    const h = vec3.normalize(vec3.add(l, v));
+    const spec = ks * Math.max(0, vec3.dot(n, h)) ** shininess;
+    return (texture ? texture(p) : kd).map((c) => c + spec);
+  };
+  return {kd, ks, shininess, km, texture, evaluate};
 }
+```
+
+With the light, viewer, and normal all aligned, the highlight is at full strength, so the reflectance
+should be ${tex`k_d + k_s`}. A default material should give 0.7 + 0.3 = 1 in each channel:
+
+```js echo
+material().evaluate([0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 0])
+```
+
+The scene below uses these materials on a few spheres and a floor. It has one point light and one
+directional light, and a few constants:
+
+```js
 const rtScene = (() => {
   const floorMat = material({texture: checker, ks: 0.1, km: [0.08, 0.08, 0.08]});
   const F = 6;
@@ -516,36 +656,71 @@ const rtScene = (() => {
     new Triangle([-2.6, 0, -1.6], [-1.4, 0, -2.4], [-2.2, 1.8, -2.2], material({kd: [0.2, 0.6, 0.3]}))
   ]);
 })();
+```
+
+```js echo
 const rtLights = [
-  {p: [3, 5, 3], I: 28},                                      // point light: position and intensity
-  {dir: vec3.normalize([-2, 1.5, 1]), I: 0.35}                // directional light: unit direction toward the light
+  {p: [3, 5, 3], I: 28},                         // a point light
+  {dir: vec3.normalize([-2, 1.5, 1]), I: 0.35}   // a directional light
 ];
 const ambient = 0.12, background = [0.6, 0.7, 0.9], EPS = 1e-3;
 
+```
+
+One light's contribution follows the first formula above. The direction and distance depend on the
+kind of light. The shadow ray runs from the hit point toward the light and stops at the light. `EPS`
+keeps it from hitting its own starting surface:
+
+```js echo
+function directLight(rec, m, v, light, opts, scene) {
+  const toL = light.dir ?? vec3.sub(light.p, rec.p);
+  const r = light.dir ? Infinity : vec3.length(toL);
+  const l = light.dir ?? vec3.scale(toL, 1 / r);
+  if (opts.shadows && scene.hit({o: rec.p, d: l}, EPS, r)) return [0, 0, 0];
+  const I = light.dir ? light.I : light.I / (r * r);
+  const E = Math.max(0, vec3.dot(rec.n, l)) * I;
+  return m.evaluate(l, v, rec.n, rec.p).map((k) => k * E);
+}
+```
+
+The mirror direction is the reflection formula:
+
+```js echo
+const mirrorDirection = (d, n) =>
+  vec3.sub(d, vec3.scale(n, 2 * vec3.dot(d, n)));
+```
+
+A ray going down and to the right off a floor should go up and to the right:
+
+```js echo
+mirrorDirection([1, -1, 0], [0, 1, 0])
+```
+
+`shadeRay` is the whole renderer. It finds the closest hit and adds ambient light plus each light's
+contribution. With lighting turned off, it shows the flat surface color. If the material is reflective
+and depth remains, it calls itself along the mirror direction:
+
+```js echo
 function shadeRay(ray, t0, t1, depth, opts, scene = rtScene) {
   const rec = scene.hit(ray, t0, t1);
   if (!rec) return background;
   const m = rec.surface.material, kd = m.texture ? m.texture(rec.p) : m.kd;
   const v = vec3.normalize(vec3.scale(ray.d, -1));
-  let c = kd.map((k) => k * ambient);                       // ambient light: k_a I_a
-  if (opts.shading) for (const light of rtLights) {
-    const toL = light.dir ?? vec3.sub(light.p, rec.p);
-    const r = light.dir ? Infinity : vec3.length(toL), l = light.dir ?? vec3.scale(toL, 1 / r);
-    if (opts.shadows && scene.hit({o: rec.p, d: l}, EPS, r)) continue;     // shadow ray over [ε, r]
-    const E = Math.max(0, vec3.dot(rec.n, l)) * (light.dir ? light.I : light.I / (r * r));
-    const k = m.evaluate(l, v, rec.n, rec.p);
-    c = c.map((ci, q) => ci + k[q] * E);
-  } else c = kd;
+  const lights = !opts.shading ? [] : rtLights.map((light) =>
+    directLight(rec, m, v, light, opts, scene));
+  let c = opts.shading
+    ? kd.map((k, q) => k * ambient + d3.sum(lights, (e) => e[q])) : kd;
   if (depth < opts.maxDepth && m.km.some((k) => k > 0)) {
-    const rdir = vec3.sub(ray.d, vec3.scale(rec.n, 2 * vec3.dot(ray.d, rec.n)));
-    const reflected = shadeRay({o: rec.p, d: rdir}, EPS, Infinity, depth + 1, opts, scene);   // recursive call
+    const mirrored = {o: rec.p, d: mirrorDirection(ray.d, rec.n)};
+    const reflected =
+      shadeRay(mirrored, EPS, Infinity, depth + 1, opts, scene);
     c = c.map((ci, q) => ci + m.km[q] * reflected[q]);
   }
   return c;
 }
 ```
 
-```js echo
+```js
 const rtForm = view(Inputs.form({
   projection: Inputs.radio(["perspective", "orthographic"], {value: "perspective", label: "projection"}),
   shading: Inputs.toggle({value: true, label: "light the scene (off = flat colors)"}),
@@ -555,7 +730,7 @@ const rtForm = view(Inputs.form({
 }));
 ```
 
-```js echo
+```js
 (() => {
   const nx = 320, ny = 200, a = (rtForm.azimuth * Math.PI) / 180;
   const frame = cameraFrame([6 * Math.sin(a), 2.6, 6 * Math.cos(a)], [0, 0.6, -0.3]);
@@ -626,12 +801,30 @@ and nothing needs flipping later.
 ```js echo
 function topLeftCamera(eye, target, fovDeg, width, height) {
   const t = Math.tan((fovDeg * Math.PI) / 360);
-  return {...cameraFrame(eye, target), t, r: (t * width) / height, width, height};   // the frame is built once per image
+  const r = (t * width) / height;
+  return {...cameraFrame(eye, target), t, r, width, height};
 }
-function pixelRay(cam, sx, sy) {                                  // (sx, sy) in pixels from the top-left
-  const u = ((2 * sx) / cam.width - 1) * cam.r, v = (1 - (2 * sy) / cam.height) * cam.t;
-  const d = vec3.add(vec3.add(vec3.scale(cam.u, u), vec3.scale(cam.v, v)), vec3.scale(cam.w, -1));
-  return {o: cam.e, d: vec3.normalize(d)};
+```
+
+`pixelRay` follows the formula. The arguments `sx` and `sy` are in pixels from the top-left:
+
+```js echo
+function pixelRay(cam, sx, sy) {
+  const u = ((2 * sx) / cam.width - 1) * cam.r;
+  const v = (1 - (2 * sy) / cam.height) * cam.t;
+  const sideways = vec3.add(vec3.scale(cam.u, u), vec3.scale(cam.v, v));
+  return {o: cam.e, d: vec3.normalize(vec3.sub(sideways, cam.w))};
+}
+```
+
+The center of the image should look straight along ${tex`-\mathbf w`}, and a point on the top row
+should look upward:
+
+```js echo
+{
+  const cam = topLeftCamera([0, 0, 5], [0, 0, 0], 90, 200, 100);
+  display([pixelRay(cam, 100, 50), pixelRay(cam, 100, 0)]
+    .map(({d}) => d.map((c) => c.toFixed(3)).join(", ")));
 }
 ```
 
@@ -664,8 +857,12 @@ ${tex.block`c = k_d\big(\alpha + (1 - \alpha)\max(0, \mathbf n\cdot\mathbf l)\bi
 The diffuse part tops out at exactly ${tex`k_d`}; a point in shadow or
 facing away from the light keeps only ${tex`\alpha\,k_d`}.
 
-```js echo
-const SQUARE = 1;                                                 // checker square size
+```js
+// checker square size
+const SQUARE = 1;
+```
+
+```js
 const checkerFloor = (p, n) => ({
   color: n[1] > 0.5 && (Math.floor(p[0] / SQUARE) + Math.floor(p[2] / SQUARE)) % 2 === 0 ? [0.9, 0.88, 0.8] : [0.18, 0.22, 0.3],
   ks: 0.05, p: 8, refl: 0
@@ -678,44 +875,89 @@ const boxScene = {
     {min: [0.3, 0, -1.2], max: [1.5, 1.2, 0], material: {color: [0.85, 0.35, 0.2], ks: 0.4, p: 32, refl: 0.25}}   // the cube, a little glossy
   ]
 };
-const ALPHA = 0.15, OFFSET = 1e-3, EPS2 = 1e-4;              // ambient fraction α, offset δ, ε
-const sky = (d) => vec3.lerp([0.85, 0.9, 1], [0.35, 0.55, 0.9], Math.max(0, d[1]));
+```
 
-function boxSceneHit(ray, t1 = Infinity) {                         // the closest hit in [ε, t1]: {t, n, material} or null
+The constants below control the shading. `ALPHA` is the ambient fraction, `OFFSET` is ${tex`\delta`},
+and `EPS2` is ${tex`\varepsilon`}. A ray that misses everything sees a sky color that deepens with
+height:
+
+```js echo
+const ALPHA = 0.15, OFFSET = 1e-3, EPS2 = 1e-4;
+const sky = (d) =>
+  vec3.lerp([0.85, 0.9, 1], [0.35, 0.55, 0.9], Math.max(0, d[1]));
+```
+
+`boxScene` holds a sphere and two boxes, the floor and the cube. The closest hit over them is the same
+shrinking-`t1` idea as `Group`:
+
+```js echo
+function boxSceneHit(ray, t1 = Infinity) {
   let best = null;
   for (const s of boxScene.spheres) {
     const t = hitSphereT(ray, s.center, s.radius, EPS2, t1);
-    if (t !== Infinity) { best = {t, n: vec3.scale(vec3.sub(at(ray, t), s.center), 1 / s.radius), material: s.material}; t1 = t; }
+    if (t === Infinity) continue;
+    const n = vec3.scale(vec3.sub(at(ray, t), s.center), 1 / s.radius);
+    best = {t, n, material: s.material};
+    t1 = t;
   }
   for (const b of boxScene.boxes) {
     const h = hitBox(ray, b.min, b.max, EPS2, t1);
-    if (h) { best = {...h, material: b.material}; t1 = h.t; }      // shrink the interval, as in a Group
+    if (h) { best = {...h, material: b.material}; t1 = h.t; }
   }
   return best;
 }
+```
 
-function traceBox(ray, depth, opts) {
-  opts.rays++;                                                    // a mesh's intersection loop would count its triangle tests the same way
-  const hit = boxSceneHit(ray);
-  if (!hit) return sky(ray.d);
-  const p = at(ray, hit.t);
-  const n = vec3.dot(hit.n, ray.d) > 0 ? vec3.scale(hit.n, -1) : hit.n;     // two-sided: face the ray
-  const m = typeof hit.material === "function" ? hit.material(p, n) : hit.material;
-  const start = vec3.add(p, vec3.scale(n, OFFSET));                         // off the surface, on the ray's side
-  const toLight = vec3.sub(boxScene.light, p), dist = vec3.length(toLight), l = vec3.scale(toLight, 1 / dist);
-  let diffuse = Math.max(0, vec3.dot(n, l)), spec = 0;
+The two-sided flip is a single test:
+
+```js echo
+const faceRay = (n, d) => (vec3.dot(n, d) > 0 ? vec3.scale(n, -1) : n);
+```
+
+A normal pointing along the ray should flip, and one facing it should stay:
+
+```js echo
+[faceRay([0, 0, 1], [0, 0, 1]), faceRay([0, 0, 1], [0, 0, -1])]
+  .map((n) => n.join(", "))
+```
+
+The light's contribution is ${tex`\max(0, \mathbf n\cdot\mathbf l)`}, zeroed by a shadow ray. The shadow
+ray starts from the offset point and stops at the light:
+
+```js echo
+function diffuseAt(p, n, start, opts) {
+  const toLight = vec3.sub(boxScene.light, p), dist = vec3.length(toLight);
+  const l = vec3.scale(toLight, 1 / dist);
+  let diffuse = Math.max(0, vec3.dot(n, l));
   if (diffuse > 0 && opts.shadows) {
     opts.rays++;
-    if (boxSceneHit({o: start, d: l}, dist)) diffuse = 0;                   // shadow ray over [ε, dist]: ambient only
+    if (boxSceneHit({o: start, d: l}, dist)) diffuse = 0;
   }
-  if (diffuse > 0) spec = m.ks * Math.max(0, vec3.dot(n, vec3.normalize(vec3.sub(l, ray.d)))) ** m.p;
-  let c = m.color.map((k) => k * (ALPHA + (1 - ALPHA) * diffuse) + spec);
-  if (m.refl > 0 && depth < opts.maxDepth) {                                // at the maximum depth, c is used as is
-    const r = vec3.sub(ray.d, vec3.scale(n, 2 * vec3.dot(ray.d, n)));
-    const reflected = traceBox({o: start, d: r}, depth + 1, opts);
-    c = c.map((ci, q) => (1 - m.refl) * ci + m.refl * reflected[q]);
-  }
-  return c;
+  return {diffuse, l};
+}
+```
+
+`traceBox` follows the same steps as `shadeRay`, using this tracer's shading formula. At the maximum
+depth, the shaded color is used as is:
+
+```js echo
+function traceBox(ray, depth, opts) {
+  opts.rays++;
+  const hit = boxSceneHit(ray);
+  if (!hit) return sky(ray.d);
+  const p = at(ray, hit.t), n = faceRay(hit.n, ray.d);
+  const m = typeof hit.material === "function"
+    ? hit.material(p, n) : hit.material;
+  const start = vec3.add(p, vec3.scale(n, OFFSET));   // off the surface
+  const {diffuse, l} = diffuseAt(p, n, start, opts);
+  const halfway = vec3.normalize(vec3.sub(l, ray.d));
+  const nh = Math.max(0, vec3.dot(n, halfway));
+  const spec = diffuse > 0 ? m.ks * nh ** m.p : 0;
+  const c = m.color.map((k) => k * (ALPHA + (1 - ALPHA) * diffuse) + spec);
+  if (m.refl === 0 || depth >= opts.maxDepth) return c;
+  const mirrored = {o: start, d: mirrorDirection(ray.d, n)};
+  const reflected = traceBox(mirrored, depth + 1, opts);
+  return c.map((ci, q) => (1 - m.refl) * ci + m.refl * reflected[q]);
 }
 ```
 
@@ -733,18 +975,18 @@ no 256-byte row alignment (unlike `copyBufferToTexture`). Clamp each
 channel before scaling by 255 (a `Uint8Array` wraps 256 to 0), and set
 alpha to 255.
 
-```js echo
+```js
 const {device, format: canvasFormat} = await initializeWebGPU(document.createElement("canvas"));   // a blank canvas: each demo adds its own below
 const deviceErrorLog = document.createElement("pre");
 deviceErrorLog.style.cssText = "display: none; color: #e5484d; background: #2a1214; border: 1px solid #e5484d; border-radius: 6px; padding: 8px 12px; font-size: 12px; white-space: pre-wrap;";
 device.addEventListener("uncapturederror", (e) => { deviceErrorLog.textContent += `WebGPU error: ${e.error.message}\n`; deviceErrorLog.style.display = "block"; });
 ```
 
-```js echo
+```js
 deviceErrorLog
 ```
 
-```js echo
+```js
 const boxDisplayModule = device.createShaderModule({code: `
 struct Out { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
 @group(0) @binding(0) var smp: sampler;
@@ -781,7 +1023,46 @@ controls starts a **new render**: a new image and texture, row 0, and
 counters at zero. The old render notices that it is no longer current
 and stops.
 
+Tracing one row fills four bytes per pixel. One ray goes through each pixel's center. Row 0 is the top
+of the image, so nothing needs flipping. Each channel is clamped before scaling, because a `Uint8Array`
+wraps 256 around to 0:
+
 ```js echo
+function traceRow(y, pixels, cam, width, opts) {
+  for (let x = 0; x < width; x++) {
+    const c = traceBox(pixelRay(cam, x + 0.5, y + 0.5), 0, opts);
+    const bytes =
+      c.map((v) => Math.round(255 * Math.min(1, Math.max(0, v))));
+    pixels.set([...bytes, 255], 4 * (y * width + x));
+  }
+}
+```
+
+The time budget decides how many rows a frame can afford:
+
+```js echo
+function traceRowsForFrame(job, height, traceOneRow) {
+  const frameStart = performance.now();
+  while (job.row < height && performance.now() - frameStart < 12) {
+    traceOneRow(job.row++);
+  }
+}
+```
+
+`writeTexture` then copies just those rows. `offset` says where they start in the byte array, and
+`origin` says where they go in the texture:
+
+```js echo
+function uploadRows(texture, pixels, width, firstRow, lastRow) {
+  device.queue.writeTexture(
+    {texture, origin: [0, firstRow]}, pixels,
+    {offset: firstRow * width * 4, bytesPerRow: width * 4},
+    [width, lastRow - firstRow]
+  );
+}
+```
+
+```js
 const boxForm = view(Inputs.form({
   scale: Inputs.range([0.1, 1], {value: 0.5, step: 0.05, label: "resolution scale"}),
   azimuth: Inputs.range([-180, 180], {value: 30, step: 1, label: "camera azimuth"}),
@@ -790,7 +1071,7 @@ const boxForm = view(Inputs.form({
 }));
 ```
 
-```js echo
+```js
 {
   const generation = ++boxRun.generation;                         // any older render stops at its next frame
   const width = Math.max(1, Math.round(boxCanvas.width * boxForm.scale));
@@ -819,19 +1100,10 @@ const boxForm = view(Inputs.form({
 
   const frame = () => {
     if (generation !== boxRun.generation || !boxCanvas.isConnected) return;   // replaced by a newer render
-    const frameStart = performance.now(), firstRow = job.row;
-    while (job.row < height && performance.now() - frameStart < 12) {
-      const y = job.row++;
-      for (let x = 0; x < width; x++) {
-        const c = traceBox(pixelRay(cam, x + 0.5, y + 0.5), 0, opts);         // one ray through the pixel's center
-        const k = 4 * (y * width + x);                                        // row 0 is the top: no flip
-        for (let q = 0; q < 3; q++) pixels[k + q] = Math.round(255 * Math.min(1, Math.max(0, c[q])));
-        pixels[k + 3] = 255;
-      }
-    }
+    const firstRow = job.row;
+    traceRowsForFrame(job, height, (y) => traceRow(y, pixels, cam, width, opts));
     if (job.row > firstRow) {
-      device.queue.writeTexture({texture, origin: [0, firstRow]}, pixels,      // copy only the new rows
-        {offset: firstRow * width * 4, bytesPerRow: width * 4}, [width, job.row - firstRow]);
+      uploadRows(texture, pixels, width, firstRow, job.row);
       draw();
     }
     boxProgress.textContent = `${width}×${height}: row ${job.row} of ${height} · ${opts.rays.toLocaleString()} rays · ${((performance.now() - started) / 1000).toFixed(2)} s`;
@@ -841,7 +1113,7 @@ const boxForm = view(Inputs.form({
 }
 ```
 
-```js echo
+```js
 html`<div>${boxCanvas}${boxProgress}</div>`
 ```
 
@@ -896,62 +1168,85 @@ ${tex`I/r^2`}, and an additive **RGB** mirror color ${tex`k_m`}. WGSL
 does **not allow recursion**, so the recursive `shadeRay` becomes a
 **loop** that carries the product of the ${tex`k_m`} colors.
 
+The data comes first. In a storage buffer, each `vec3` is aligned to 16 bytes, so the structs below pack
+pairs of `vec3` and `f32` into 16-byte rows:
+
 ```js echo
-const gpuRTModule = device.createShaderModule({code: `
-struct Camera {                  // vec3 + f32 pairs pack into 16-byte rows
-  e: vec3<f32>, dist: f32,       // dist: image plane distance d
+const wgslRTStructs = `
+struct Camera {
+  e: vec3<f32>, dist: f32,
   u: vec3<f32>, l: f32,
   v: vec3<f32>, r: f32,
   w: vec3<f32>, b: f32,
   t: f32, selected: f32, shadows: f32, maxDepth: f32,
 };
-struct Sphere { center: vec3<f32>, radius: f32, color: vec3<f32>, km: vec3<f32> };   // 48 B: [c, radius, color, 0, km, 0]
-struct Light { pos: vec3<f32>, intensity: vec3<f32> };                                // 32 B: [pos, 0, intensity, 0]
+struct Sphere {
+  center: vec3<f32>, radius: f32, color: vec3<f32>, km: vec3<f32>
+};
+struct Light { pos: vec3<f32>, intensity: vec3<f32> };
 struct Ray { o: vec3<f32>, d: vec3<f32> };
 struct Hit { t: f32, n: vec3<f32>, idx: i32 };
-
 @group(0) @binding(0) var<uniform> cam: Camera;
 @group(0) @binding(1) var<storage, read> spheres: array<Sphere>;
 @group(0) @binding(2) var<storage, read> lights: array<Light>;
 @group(0) @binding(3) var outTex: texture_storage_2d<rgba8unorm, write>;
-
 const ambient = vec3<f32>(0.1);
 const eps = 1e-3;
-const background = vec3<f32>(0.6, 0.7, 0.9);
+const background = vec3<f32>(0.6, 0.7, 0.9);`;
+```
 
+Ray generation is the same formula as the JavaScript `viewingRay`, for a perspective camera:
+
+```js echo
+const wgslViewingRay = `
 fn viewingRay(i: u32, j: u32, nx: u32, ny: u32) -> Ray {
   let us = cam.l + (cam.r - cam.l) * (f32(i) + 0.5) / f32(nx);
   let vs = cam.b + (cam.t - cam.b) * (f32(j) + 0.5) / f32(ny);
-  return Ray(cam.e, normalize(-cam.dist * cam.w + us * cam.u + vs * cam.v));   // perspective ray, unit direction
-}
+  return Ray(cam.e, normalize(-cam.dist * cam.w + us * cam.u + vs * cam.v));
+}`;
+```
 
-fn hitSphere(s: Sphere, r: Ray, t0: f32, t1: f32) -> f32 {           // t, or -1 for a miss
+So is the sphere test. WGSL has no `Infinity` to return easily, so a miss is reported as −1:
+
+```js echo
+const wgslHitSphere = `
+fn hitSphere(s: Sphere, r: Ray, t0: f32, t1: f32) -> f32 {
   let ec = r.o - s.center;
   let A = dot(r.d, r.d);
   let B = dot(r.d, ec);
-  let C = dot(ec, ec) - s.radius * s.radius;
-  let disc = B * B - A * C;
-  if (disc < 0.0) { return -1.0; }                                  // check the discriminant first
-  let sq = sqrt(disc);
-  var t = (-B - sq) / A;
-  if (t < t0 || t > t1) { t = (-B + sq) / A; }
-  if (t < t0 || t > t1) { return -1.0; }
-  return t;
-}
+  let disc = B * B - A * (dot(ec, ec) - s.radius * s.radius);
+  if (disc < 0.0) { return -1.0; }
+  var t = (-B - sqrt(disc)) / A;
+  if (t < t0 || t > t1) { t = (-B + sqrt(disc)) / A; }
+  return select(t, -1.0, t < t0 || t > t1);
+}`;
+```
 
+The closest hit loops over the storage buffer, shrinking the interval as a group does. `arrayLength`
+reads the array's size from its buffer:
+
+```js echo
+const wgslSceneHit = `
 fn sceneHit(r: Ray, t0: f32, t1in: f32) -> Hit {
   var h = Hit(-1.0, vec3<f32>(0.0), -1);
   var t1 = t1in;
   for (var k = 0u; k < arrayLength(&spheres); k++) {
     let t = hitSphere(spheres[k], r, t0, t1);
     if (t >= 0.0) {
-      t1 = t;                                                       // shrink the interval
-      h = Hit(t, (r.o + t * r.d - spheres[k].center) / spheres[k].radius, i32(k));
+      t1 = t;
+      let n = (r.o + t * r.d - spheres[k].center) / spheres[k].radius;
+      h = Hit(t, n, i32(k));
     }
   }
   return h;
-}
+}`;
+```
 
+Shading sums the lights, with a shadow ray for each light the surface faces. The `selected` test highlights
+a sphere picked with the mouse:
+
+```js echo
+const wgslShade = `
 fn shade(r: Ray, h: Hit) -> vec3<f32> {
   let s = spheres[h.idx];
   let x = r.o + h.t * r.d;
@@ -961,18 +1256,28 @@ fn shade(r: Ray, h: Hit) -> vec3<f32> {
     let dist = length(toL);
     let l = toL / dist;
     let ndl = dot(h.n, l);
-    if (ndl <= 0.0) { continue; }                                     // faces away: no shadow ray needed
-    if (cam.shadows > 0.5 && sceneHit(Ray(x, l), eps, dist).idx >= 0) { continue; }   // shadow ray over [ε, dist]
-    c += s.color * lights[k].intensity * ndl / (dist * dist);         // Lambert: color plays R/π
+    if (ndl <= 0.0) { continue; }
+    let blocker = sceneHit(Ray(x, l), eps, dist);
+    if (cam.shadows > 0.5 && blocker.idx >= 0) { continue; }
+    c += s.color * lights[k].intensity * ndl / (dist * dist);
   }
-  if (h.idx == i32(cam.selected)) { c = 0.5 * c + vec3<f32>(0.5, 0.4, 0.05); }        // picked
+  if (h.idx == i32(cam.selected)) {
+    c = 0.5 * c + vec3<f32>(0.5, 0.4, 0.05);
+  }
   return c;
-}
+}`;
+```
 
+Now the recursion becomes a loop. Instead of calling itself, `trace` keeps `weight`, the product of the
+${tex`k_m`} colors so far, and replaces the ray with its reflection. A nonreflective surface or a miss ends the
+path:
+
+```js echo
+const wgslTrace = `
 fn trace(primary: Ray) -> vec3<f32> {
   var ray = primary;
   var color = vec3<f32>(0.0);
-  var weight = vec3<f32>(1.0);                     // product of the k_m colors along the path
+  var weight = vec3<f32>(1.0);
   for (var depth = 0; depth <= i32(cam.maxDepth); depth++) {
     let h = sceneHit(ray, eps, 1e30);
     if (h.idx < 0) { color += weight * background; break; }
@@ -980,20 +1285,28 @@ fn trace(primary: Ray) -> vec3<f32> {
     let km = spheres[h.idx].km;
     if (all(km == vec3<f32>(0.0))) { break; }
     weight *= km;
-    let p = ray.o + h.t * ray.d;
-    ray = Ray(p, ray.d - 2.0 * dot(ray.d, h.n) * h.n);                // r = d − 2(d·n)n
+    ray = Ray(ray.o + h.t * ray.d, ray.d - 2.0 * dot(ray.d, h.n) * h.n);
   }
   return color;
-}
+}`;
+```
 
+Each invocation handles one pixel. Texture rows go down and ${tex`j`} goes up, hence the flip. The bounds check skips
+the extra invocations of the last, partly filled workgroups:
+
+```js echo
+const wgslTraceMain = `
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let dims = textureDimensions(outTex);
   if (id.x >= dims.x || id.y >= dims.y) { return; }
-  let ray = viewingRay(id.x, dims.y - 1u - id.y, dims.x, dims.y);    // texture rows go down; j goes up
+  let ray = viewingRay(id.x, dims.y - 1u - id.y, dims.x, dims.y);
   textureStore(outTex, id.xy, vec4<f32>(trace(ray), 1.0));
-}
+}`;
+```
 
+```js
+const gpuRTModule = device.createShaderModule({code: `${wgslRTStructs}${wgslViewingRay}${wgslHitSphere}${wgslSceneHit}${wgslShade}${wgslTrace}${wgslTraceMain}
 // Display: the full-screen triangle, sampling the texture with uv, encoded for the screen.
 // (Its bindings reuse group 0; that's fine because each entry point has its own layout.)
 struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
@@ -1001,7 +1314,7 @@ struct VOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
 @group(0) @binding(1) var image: texture_2d<f32>;
 @vertex
 fn vs_main(@builtin(vertex_index) i: u32) -> VOut {
-  let c = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));                 // (0,0), (2,0), (0,2)
+  let c = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
   return VOut(vec4<f32>(c * 2.0 - 1.0, 0.0, 1.0), vec2<f32>(c.x, 1.0 - c.y));
 }
 @fragment
@@ -1011,20 +1324,45 @@ fn fs_main(o: VOut) -> @location(0) vec4<f32> {
 }`});
 ```
 
-The scene data: a huge sphere stands in for the floor, so every object is
-a sphere.
+The scene data stays out of sight. It is a list of five spheres, including a huge one, radius 1000, that stands
+in for the floor, so every object is a sphere. The gold sphere's ${tex`k_m`} is (0.7, 0.55, 0.15), so it reflects
+yellow more than blue.
 
-```js echo
+```js
 const gpuSpheres = [
-  {name: "floor", center: [0, -1000, 0], radius: 1000, color: [0.5, 0.5, 0.45], km: [0.1, 0.1, 0.1]},
-  {name: "red", center: [-1.3, 0.7, 0], radius: 0.7, color: [0.8, 0.15, 0.15], km: [0, 0, 0]},
-  {name: "mirror", center: [0.3, 0.9, -1.2], radius: 0.9, color: [0.05, 0.05, 0.05], km: [0.85, 0.85, 0.85]},
-  {name: "gold", center: [1.5, 0.5, 0.4], radius: 0.5, color: [0.6, 0.45, 0.1], km: [0.7, 0.55, 0.15]},   // reflects yellow more than blue
-  {name: "blue", center: [-0.3, 0.35, 1.2], radius: 0.35, color: [0.15, 0.3, 0.8], km: [0.1, 0.1, 0.1]}
+  {
+    name: "floor", center: [0, -1000, 0], radius: 1000,
+    color: [0.5, 0.5, 0.45], km: [0.1, 0.1, 0.1]
+  },
+  {
+    name: "red", center: [-1.3, 0.7, 0], radius: 0.7,
+    color: [0.8, 0.15, 0.15], km: [0, 0, 0]
+  },
+  {
+    name: "mirror", center: [0.3, 0.9, -1.2], radius: 0.9,
+    color: [0.05, 0.05, 0.05], km: [0.85, 0.85, 0.85]
+  },
+  // reflects yellow more than blue
+  {
+    name: "gold", center: [1.5, 0.5, 0.4], radius: 0.5,
+    color: [0.6, 0.45, 0.1], km: [0.7, 0.55, 0.15]
+  },
+  {
+    name: "blue", center: [-0.3, 0.35, 1.2], radius: 0.35,
+    color: [0.15, 0.3, 0.8], km: [0.1, 0.1, 0.1]
+  }
 ];
-const gpuLights = [{pos: [3, 5, 3], intensity: [30, 30, 30]}, {pos: [-4, 3, 2], intensity: [10, 9, 8]}];
+const gpuLights = [
+  {pos: [3, 5, 3], intensity: [30, 30, 30]},
+  {pos: [-4, 3, 2], intensity: [10, 9, 8]}
+];
 const gpuW = 480, gpuH = 300;
 
+```
+
+The spheres and lights are written to storage buffers. The trace pipeline and bind groups are created in the usual way and stay out of sight.
+
+```js
 const sphereBuffer = device.createBuffer({size: gpuSpheres.length * 48, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST});
 device.queue.writeBuffer(sphereBuffer, 0, new Float32Array(gpuSpheres.flatMap((s) => [...s.center, s.radius, ...s.color, 0, ...s.km, 0])));
 const lightBuffer = device.createBuffer({size: gpuLights.length * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST});
@@ -1058,16 +1396,37 @@ code, in JavaScript, with the camera the GPU used. A click is a
 continuous position, not a pixel index, so there is no ${tex`+0.5`}:
 
 ```js echo
+function pickingRay(cam, px, py, width, height) {
+  const us = cam.l + (cam.r - cam.l) * px / width;
+  const vs = cam.b + (cam.t - cam.b) * py / height;
+  const sideways = vec3.add(vec3.scale(cam.u, us), vec3.scale(cam.v, vs));
+  return {o: cam.e, d: vec3.add(vec3.scale(cam.w, -cam.d), sideways)};
+}
+```
+
+The closest-hit test is the CPU's `Group`, built from the same data the GPU uses. Each sphere carries its index:
+
+```js echo
+function pickSphere(ray) {
+  const picker = new Group(gpuSpheres.map((s, k) =>
+    Object.assign(new Sphere(s.center, s.radius), {k})));
+  return picker.hit(ray, 0, Infinity);
+}
+```
+
+The click handler connects them. Screen ${tex`y`} counts down, and the ray's ${tex`v`} counts up, so `py` measures
+from the bottom:
+
+```js echo
 gpuCanvas.addEventListener("click", (ev) => {
-  const rect = gpuCanvas.getBoundingClientRect(), cam = gpuState.camera;
-  const px = ev.clientX - rect.left;                                         // continuous: no + 0.5
-  const py = rect.bottom - ev.clientY;                                       // counts up from the bottom
-  const us = cam.l + (cam.r - cam.l) * px / rect.width, vs = cam.b + (cam.t - cam.b) * py / rect.height;
-  const ray = {o: cam.e, d: vec3.add(vec3.scale(cam.w, -cam.d), vec3.add(vec3.scale(cam.u, us), vec3.scale(cam.v, vs)))};
-  const picker = new Group(gpuSpheres.map((s, k) => Object.assign(new Sphere(s.center, s.radius), {k})));
-  const hit = picker.hit(ray, 0, Infinity);                                 // closest hit
+  const rect = gpuCanvas.getBoundingClientRect();
+  const px = ev.clientX - rect.left, py = rect.bottom - ev.clientY;
+  const ray = pickingRay(gpuState.camera, px, py, rect.width, rect.height);
+  const hit = pickSphere(ray);
   gpuState.selected = hit ? hit.surface.k : -1;
-  pickLabel.textContent = hit ? `picked: ${gpuSpheres[hit.surface.k].name} at t = ${hit.t.toFixed(3)}` : "picked: nothing (background)";
+  pickLabel.textContent = hit
+    ? `picked: ${gpuSpheres[hit.surface.k].name} at t = ${hit.t.toFixed(3)}`
+    : "picked: nothing (background)";
   gpuState.draw();
 });
 ```
@@ -1081,7 +1440,7 @@ ${tex`\mathbf v = (V_1, V_5, V_9)`}, and
 ${tex`\mathbf w = (V_2, V_6, V_{10})`}. The origin ${tex`\mathbf e`} is
 the camera's eye, not the matrix's translation.
 
-```js echo
+```js
 const gpuForm = view(Inputs.form({
   azimuth: Inputs.range([-180, 180], {value: 20, step: 1, label: "camera azimuth"}),
   elevation: Inputs.range([5, 70], {value: 20, step: 1, label: "camera elevation"}),
@@ -1090,7 +1449,7 @@ const gpuForm = view(Inputs.form({
 }));
 ```
 
-```js echo
+```js
 {
   const az = (gpuForm.azimuth * Math.PI) / 180, el = (gpuForm.elevation * Math.PI) / 180;
   const eye = [6.5 * Math.cos(el) * Math.sin(az), 0.6 + 6.5 * Math.sin(el), 6.5 * Math.cos(el) * Math.cos(az)];
@@ -1117,7 +1476,7 @@ const gpuForm = view(Inputs.form({
 }
 ```
 
-```js echo
+```js
 html`<div>${gpuCanvas}${pickLabel}</div>`
 ```
 

@@ -3,7 +3,7 @@ title: Module 06 — Signal Processing
 toc: true
 ---
 
-```js echo
+```js
 import * as raster from "./components/raster.js";
 import * as d3 from "npm:d3";
 import * as Inputs from "npm:@observablehq/inputs";
@@ -21,7 +21,8 @@ others.
 
 Every example is plain JavaScript on arrays, so no GPU is needed. Each
 formula becomes a function you can call, and each
-figure becomes a plot you can change with a slider. This handout teaches
+figure becomes a plot you can change with a slider. The code is part of the
+reading, while the code that only prepares and draws plots stays out of sight. This handout teaches
 the *techniques* behind signal processing; it is not a walkthrough of any
 graded assignment.
 
@@ -54,14 +55,21 @@ function aliasOf(f, fs) {
 }
 ```
 
+The classic audio example below is a 10,000 Hz tone sampled at 8000 Hz. The
+nearest multiple of 8000 is 8000 itself, so the alias should be 2000 Hz:
+
 ```js echo
+aliasOf(10000, 8000)
+```
+
+```js
 const sineForm = view(Inputs.form({
   f: Inputs.range([0.2, 10], {value: 4.5, step: 0.1, label: "signal frequency (Hz)"}),
   fs: Inputs.range([1, 12], {value: 5, step: 0.25, label: "sample rate (Hz)"})
 }));
 ```
 
-```js echo
+```js
 const sineAlias = aliasOf(sineForm.f, sineForm.fs);
 const sineTimes = d3.range(0, 2.0001, 0.002);
 const sineTrue = sineTimes.map((t) => ({t, y: Math.sin(2 * Math.PI * sineForm.f * t)}));
@@ -69,7 +77,7 @@ const sineAliasCurve = sineTimes.map((t) => ({t, y: Math.sin(2 * Math.PI * sineA
 const sineSamples = d3.range(0, 2.0001, 1 / sineForm.fs).map((t) => ({t, y: Math.sin(2 * Math.PI * sineForm.f * t)}));
 ```
 
-```js echo
+```js
 Plot.plot({
   height: 240,
   x: {label: "time t (s)"},
@@ -103,7 +111,7 @@ function playSampledTone(freq, sampleRate, seconds = 1) {
   const n = Math.round(sampleRate * seconds);
   const buffer = ctx.createBuffer(1, n, sampleRate);
   const samples = buffer.getChannelData(0);
-  const fadeLength = sampleRate * 0.05; // 50 ms fade in and out avoids clicks
+  const fadeLength = sampleRate * 0.05; // a 50 ms fade avoids clicks
   for (let i = 0; i < n; i++) {
     const fade = Math.min(1, i / fadeLength, (n - i) / fadeLength);
     samples[i] = 0.15 * fade * Math.sin(2 * Math.PI * freq * i / sampleRate);
@@ -116,14 +124,14 @@ function playSampledTone(freq, sampleRate, seconds = 1) {
 }
 ```
 
-```js echo
+```js
 const toneForm = view(Inputs.form({
   freq: Inputs.range([200, 12000], {value: 10000, step: 100, label: "tone (Hz)"}),
   rate: Inputs.select([8000, 16000, 22050, 48000], {value: 8000, label: "sample rate (Hz)"})
 }));
 ```
 
-```js echo
+```js
 html`<button onclick=${() => playSampledTone(toneForm.freq, toneForm.rate)}>▶ Play ${toneForm.freq} Hz sampled at ${toneForm.rate} Hz</button>`
 ```
 
@@ -163,13 +171,24 @@ function discreteFilter(weights) {
   return {r, w, at: (k) => (Math.abs(k) <= r ? w[k + r] : 0)};
 }
 
+```
+
+`convolveAt` follows the formula. Only ${tex`2r+1`} terms can be nonzero, so the loop runs over those values of ${tex`j`}:
+
+```js echo
 function convolveAt(a, b, i) {
   let s = 0;
   for (let j = i - b.r; j <= i + b.r; j++) s += a(j) * b.at(i - j);
   return s;
 }
 
-const boxDiscrete = (r) => discreteFilter(Array(2 * r + 1).fill(1 / (2 * r + 1)));
+```
+
+Two useful filters and a test signal follow. A box has equal weights that sum to 1, and the binomial weights are a row of Pascal's triangle, divided by their sum:
+
+```js echo
+const boxDiscrete = (r) =>
+  discreteFilter(Array(2 * r + 1).fill(1 / (2 * r + 1)));
 const binomial5 = discreteFilter([1, 4, 6, 4, 1].map((v) => v / 16));
 const step = (i) => (i >= 0 ? 1 : 0);
 ```
@@ -178,7 +197,7 @@ const step = (i) => (i >= 0 ? 1 : 0);
 (${tex`r=2`}) gives the ramp
 ${tex`\tfrac15[\dots,0,0,1,2,3,4,5,5,\dots]`}:
 
-```js echo
+```js
 Inputs.table(d3.range(-4, 5).map((i) => {
   const value = convolveAt(step, boxDiscrete(2), i);
   return {i, "a[i]": step(i), "(a ⋆ b)[i]": value, "5 · (a ⋆ b)[i]": Math.round(5 * value)};
@@ -188,7 +207,7 @@ Inputs.table(d3.range(-4, 5).map((i) => {
 Now try other filters on a step. You can add noise to see how filtering
 removes it:
 
-```js echo
+```js
 const smoothFilters = {
   "3-point box (r = 1)": boxDiscrete(1),
   "5-point box (r = 2)": boxDiscrete(2),
@@ -202,14 +221,14 @@ const noiseValues = (() => {
 })();
 ```
 
-```js echo
+```js
 const smoothForm = view(Inputs.form({
   filter: Inputs.select(Object.keys(smoothFilters), {value: "5-point box (r = 2)", label: "filter b"}),
   noise: Inputs.range([0, 0.4], {value: 0, step: 0.01, label: "noise on the step"})
 }));
 ```
 
-```js echo
+```js
 const noisyStep = (i) => step(i) + (Math.abs(i) <= 20 ? smoothForm.noise * noiseValues[i + 20] : 0);
 const smoothRows = d3.range(-15, 16).map((i) => ({
   i,
@@ -218,7 +237,7 @@ const smoothRows = d3.range(-15, 16).map((i) => ({
 }));
 ```
 
-```js echo
+```js
 Plot.plot({
   height: 240,
   x: {label: "i"},
@@ -247,9 +266,15 @@ produces a filter whose radius is the sum of their radii:
 ```js echo
 function convolveFilters(b1, b2) {
   const r = b1.r + b2.r;
-  return discreteFilter(d3.range(-r, r + 1).map((i) => convolveAt(b1.at, b2, i)));
+  const weights = d3.range(-r, r + 1).map((i) => convolveAt(b1.at, b2, i));
+  return discreteFilter(weights);
 }
 
+```
+
+Convolving a box with itself twice gives these two combined filters:
+
+```js echo
 const box3 = boxDiscrete(1);
 const box3x2 = convolveFilters(box3, box3);
 const box3x3 = convolveFilters(box3x2, box3);
@@ -261,7 +286,7 @@ const box3x3 = convolveFilters(box3x2, box3);
 The following check filters a random signal three times and compares the
 result with a single pass of the combined filter:
 
-```js echo
+```js
 const assocCheck = (() => {
   const rand = d3.randomLcg(7);
   const values = d3.range(200).map(() => rand());
@@ -291,7 +316,8 @@ single filter, ${tex`a - a \star b = a \star (d - b)`}:
 
 ```js echo
 const impulse = discreteFilter([1]);
-const highPass = discreteFilter([0, 0, 1, 0, 0].map((v, k) => v - binomial5.w[k]));
+const highPass =
+  discreteFilter([0, 0, 1, 0, 0].map((v, k) => v - binomial5.w[k]));
 ```
 
 ${tex`d - b`} = ${tex`\tfrac1{16}`}[${Array.from(highPass.w, (v) => Math.round(v * 16)).join(", ")}]. Its weights sum to
@@ -320,21 +346,37 @@ function integrate(f, lo, hi, n = 4000) {
   return s * h;
 }
 
+```
+
+The midpoint rule adds up thin rectangles. Convolution then integrates the product from the formula, over the range where ${tex`f`} is nonzero:
+
+```js echo
 // (f ⋆ g)(x), with f known to be zero outside [lo, hi].
 function convolveContinuous(f, g, x, lo, hi, n = 2000) {
   return integrate((t) => f(t) * g(x - t), lo, hi, n);
 }
 
+```
+
+We test it on the unit box, which is 1 on a half-open interval of width 1:
+
+```js echo
 const unitBox = (x) => (x >= -0.5 && x < 0.5 ? 1 : 0);
 ```
 
 Slide ${tex`x`} to see why **box ⋆ box = tent**:
 
+Box ⋆ box should give ${tex`1 - |x|`}, so at ${tex`x = 0.25`} the result should be very close to 0.75:
+
 ```js echo
+convolveContinuous(unitBox, unitBox, 0.25, -0.5, 0.5)
+```
+
+```js
 const slideX = view(Inputs.range([-1.5, 1.5], {value: 0.4, step: 0.01, label: "x"}));
 ```
 
-```js echo
+```js
 const slideRows = d3.range(-2, 2.0001, 0.005).map((t) => ({
   t,
   f: unitBox(t),
@@ -349,7 +391,7 @@ const tentRows = d3.range(-1.5, 1.5001, 0.02).map((x) => ({
 }));
 ```
 
-```js echo
+```js
 raster.sideBySide([
   ["f(t), g(x − t), and the shaded product", Plot.plot({
     width: 320, height: 200, x: {label: "t"}, y: {domain: [0, 1.2], label: null},
@@ -380,11 +422,11 @@ width ${tex`\varepsilon`} and height ${tex`1/\varepsilon`}, then watch
 ${tex`\delta_\varepsilon \star f`} approach ${tex`f`} as
 ${tex`\varepsilon`} shrinks:
 
-```js echo
+```js
 const epsilon = view(Inputs.range([0.02, 2], {value: 1, step: 0.01, label: "ε (spike width)"}));
 ```
 
-```js echo
+```js
 (() => {
   const f = (x) => Math.sin(3 * x) + 0.4 * Math.sin(9 * x);
   const deltaEps = (x) => (Math.abs(x) < epsilon / 2 ? 1 / epsilon : 0);
@@ -421,7 +463,9 @@ work too. (The filter library `filters` is defined in the next section.)
 function reconstruct(a, filter, x) {
   const r = filter.radius;
   let s = 0;
-  for (let i = Math.ceil(x - r); i <= Math.floor(x + r); i++) s += a(i) * filter.f(x - i);
+  for (let i = Math.ceil(x - r); i <= Math.floor(x + r); i++) {
+    s += a(i) * filter.f(x - i);
+  }
   return s;
 }
 ```
@@ -430,7 +474,7 @@ A typical example is ${tex`x = 5.3`} with a radius-2 filter.
 Catmull–Rom weights show which samples contribute (${tex`a[i] = 1`}
 here, so the weights are also the terms):
 
-```js echo
+```js
 Inputs.table(d3.range(Math.ceil(5.3 - 2), Math.floor(5.3 + 2) + 1).map((i) => ({
   i, "x − i": 5.3 - i, "f(x − i)": filters.catmullRom.f(5.3 - i)
 })), {format: {"x − i": (v) => v.toFixed(1), "f(x − i)": (v) => v.toFixed(4)}})
@@ -443,13 +487,13 @@ ${d3.sum([4, 5, 6, 7], (i) => filters.catmullRom.f(5.3 - i)).toFixed(4)}.
 copy of the filter, scaled by its value, and the reconstruction is the
 sum of all the copies:
 
-```js echo
+```js
 const reconSamples = [1, 3, 2, 4, 3.5, 1.5, 2, 2.8, 1, 1.5];
 const reconA = (i) => (i >= 0 && i < reconSamples.length ? reconSamples[i] : 0);
 const reconFilterKey = view(Inputs.select(Object.keys(filters), {value: "tent", label: "filter f", format: (k) => filters[k].name}));
 ```
 
-```js echo
+```js
 (() => {
   const flt = filters[reconFilterKey];
   const xs = d3.range(-2.5, 11.5001, 0.01);
@@ -486,39 +530,50 @@ This is the 16-sample neighborhood that bicubic image interpolation uses.
 Each filter is defined at its **natural radius** (the size for unit
 sample spacing) and has area 1. Scaling a filter by ${tex`s`} uses
 ${tex`f_s(x) = f(x/s)/s`}. It stretches the filter by ${tex`s`} and
-divides by ${tex`s`}, so the area stays at 1.
+divides by ${tex`s`}, so the area stays at 1. The cubic filters below all have natural radius 2. The B-spline's two pieces meet smoothly at ${tex`|x| = 1`}:
 
 ```js echo
-// Piecewise cubics with natural radius 2, written piece by piece.
 function fB(x) {
-  const t = Math.abs(x);
-  if (t <= 1) { const u = 1 - t; return (-3 * u ** 3 + 3 * u ** 2 + 3 * u + 1) / 6; }
-  if (t <= 2) return (2 - t) ** 3 / 6;
-  return 0;
+  const t = Math.abs(x), u = 1 - t;
+  if (t <= 1) return (-3 * u ** 3 + 3 * u ** 2 + 3 * u + 1) / 6;
+  return t <= 2 ? (2 - t) ** 3 / 6 : 0;
 }
+```
+
+Catmull–Rom has the same structure. Its inner piece is shaped so that it passes through 1 at 0 and 0 at 1, which is what makes it interpolate:
+
+```js echo
 function fC(x) {
-  const t = Math.abs(x);
-  if (t <= 1) { const u = 1 - t; return (-3 * u ** 3 + 4 * u ** 2 + u) / 2; }
-  if (t <= 2) { const v = 2 - t; return (v ** 3 - v ** 2) / 2; }
-  return 0;
+  const t = Math.abs(x), u = 1 - t, v = 2 - t;
+  if (t <= 1) return (-3 * u ** 3 + 4 * u ** 2 + u) / 2;
+  return t <= 2 ? (v ** 3 - v ** 2) / 2 : 0;
 }
+```
+
+Mitchell–Netravali is a blend of the two, ${tex`f_M = \tfrac13 f_B + \tfrac23 f_C`}, which is checked below:
+
+```js echo
 function fM(x) {
-  const t = Math.abs(x);
-  if (t <= 1) { const u = 1 - t; return (-21 * u ** 3 + 27 * u ** 2 + 9 * u + 1) / 18; }
-  if (t <= 2) { const v = 2 - t; return (7 * v ** 3 - 6 * v ** 2) / 18; }
-  return 0;
+  const t = Math.abs(x), u = 1 - t, v = 2 - t;
+  if (t <= 1) return (-21 * u ** 3 + 27 * u ** 2 + 9 * u + 1) / 18;
+  return t <= 2 ? (7 * v ** 3 - 6 * v ** 2) / 18 : 0;
 }
+```
 
-// The Gaussian has infinite support; we trim it at radius trim·σ.
+The Gaussian has infinite support, so we trim it at radius `trim`·σ:
+
+```js echo
 function gaussianFilter(sigma = 1, trim = 3) {
-  const r = trim * sigma;
-  return {
-    name: `Gaussian (σ = ${sigma})`,
-    radius: r,
-    f: (x) => (Math.abs(x) <= r ? Math.exp(-(x * x) / (2 * sigma * sigma)) / (sigma * Math.sqrt(2 * Math.PI)) : 0)
-  };
+  const r = trim * sigma, k = 1 / (sigma * Math.sqrt(2 * Math.PI));
+  const f = (x) =>
+    Math.abs(x) <= r ? k * Math.exp(-(x * x) / (2 * sigma * sigma)) : 0;
+  return {name: `Gaussian (σ = ${sigma})`, radius: r, f};
 }
+```
 
+Together with the two simplest filters, these make up our library:
+
+```js echo
 const filters = {
   box: {name: "Box", radius: 0.5, f: (x) => (x >= -0.5 && x < 0.5 ? 1 : 0)},
   tent: {name: "Tent", radius: 1, f: (x) => Math.max(0, 1 - Math.abs(x))},
@@ -528,14 +583,20 @@ const filters = {
   mitchell: {name: "Mitchell–Netravali", radius: 2, f: fM}
 };
 
+```
+
+Scaling follows the formula, and the radius grows by the same factor:
+
+```js echo
 function scaleFilter(filter, s) {
-  return {name: filter.name, radius: filter.radius * s, f: (x) => filter.f(x / s) / s};
+  const f = (x) => filter.f(x / s) / s;
+  return {name: filter.name, radius: filter.radius * s, f};
 }
 ```
 
 Two claims about these filters can be checked numerically:
 
-```js echo
+```js
 const filterChecks = {
   // f_M = f_B / 3 + 2 f_C / 3
   mitchellBlend: d3.max(d3.range(-2.5, 2.5, 0.001), (x) => Math.abs(fM(x) - (fB(x) / 3 + 2 * fC(x) / 3))),
@@ -550,21 +611,21 @@ const filterChecks = {
 
 ### A gallery of filters
 
-```js echo
+```js
 const galleryForm = view(Inputs.form({
   shown: Inputs.checkbox(Object.keys(filters), {value: ["box", "tent", "bspline", "catmullRom"], label: "filters", format: (k) => filters[k].name}),
   s: Inputs.range([0.5, 3], {value: 1, step: 0.05, label: "scale s"})
 }));
 ```
 
-```js echo
+```js
 const galleryRows = galleryForm.shown.flatMap((key) => {
   const scaled = scaleFilter(filters[key], galleryForm.s);
   return d3.range(-6, 6.0001, 0.01).map((x) => ({x, y: scaled.f(x), name: scaled.name}));
 });
 ```
 
-```js echo
+```js
 Plot.plot({
   height: 260,
   x: {label: "x", domain: [-6, 6]},
@@ -577,7 +638,7 @@ Plot.plot({
 })
 ```
 
-```js echo
+```js
 Inputs.table(galleryForm.shown.map((key) => {
   const scaled = scaleFilter(filters[key], galleryForm.s);
   return {filter: scaled.name, radius: scaled.radius, area: integrate(scaled.f, -scaled.radius, scaled.radius)};
@@ -602,13 +663,14 @@ function rippleOf(filter, s = 1, samples = 400) {
   const scaled = scaleFilter(filter, s);
   let worst = 0;
   for (let k = 0; k < samples; k++) {
-    worst = Math.max(worst, Math.abs(reconstruct(() => 1, scaled, k / samples) - 1));
+    const value = reconstruct(() => 1, scaled, k / samples);
+    worst = Math.max(worst, Math.abs(value - 1));
   }
   return worst;
 }
 ```
 
-```js echo
+```js
 Inputs.table(Object.values(filters).map((flt) => {
   const minValue = d3.min(d3.range(-flt.radius, flt.radius, 0.001), flt.f);
   const [f0, f1, f2] = [flt.f(0), flt.f(1), flt.f(2)];
@@ -644,18 +706,18 @@ ${tex`C^1`}, and the B-spline is the smoothest (${tex`C^2`}).
 
 Reconstruct a step with each filter:
 
-```js echo
+```js
 const interpShown = view(Inputs.checkbox(["tent", "bspline", "catmullRom", "mitchell"], {
   value: ["bspline", "catmullRom"], label: "reconstruct with", format: (k) => filters[k].name
 }));
 ```
 
-```js echo
+```js
 const interpRows = interpShown.flatMap((key) =>
   d3.range(-5, 5.0001, 0.01).map((x) => ({x, y: reconstruct(step, filters[key], x), name: filters[key].name})));
 ```
 
-```js echo
+```js
 Plot.plot({
   height: 240, x: {label: "x"}, y: {label: null}, color: {legend: true},
   marks: [
@@ -666,7 +728,7 @@ Plot.plot({
 })
 ```
 
-```js echo
+```js
 Inputs.table(interpShown.map((key) => {
   const ys = d3.range(-5, 5.0001, 0.01).map((x) => reconstruct(step, filters[key], x));
   return {filter: filters[key].name, "max (overshoot above 1)": d3.max(ys), "min (undershoot below 0)": d3.min(ys), "value at x = 0": reconstruct(step, filters[key], 0)};
@@ -684,7 +746,7 @@ radius. None of them is guaranteed to be ripple-free at a **non-integer
 scale**. Reconstruct the constant sequence ${tex`a[i]=1`} and look for
 wobble:
 
-```js echo
+```js
 const rippleChoices = {
   "Tent": filters.tent,
   "Box": filters.box,
@@ -701,7 +763,7 @@ const rippleForm = view(Inputs.form({
 }));
 ```
 
-```js echo
+```js
 const rippleScaled = scaleFilter(rippleChoices[rippleForm.filter], rippleForm.s);
 // For a ≡ 1, the weighted sum Σ a[i] f(x − i) and the weight sum Σ f(x − i)
 // are the same number, so renormalizing makes the result exactly 1.
@@ -711,7 +773,7 @@ const rippleRows = d3.range(0, 6.0001, 0.005).map((x) => {
 });
 ```
 
-```js echo
+```js
 Plot.plot({
   height: 200, x: {label: "x"}, y: {label: "reconstruction of a ≡ 1", domain: [0.8, 1.2]},
   marks: [Plot.ruleY([1], {strokeOpacity: 0.3}), Plot.line(rippleRows, {x: "x", y: "y", stroke: "steelblue", strokeWidth: 2})]
@@ -739,7 +801,7 @@ point RGB images and clamp coordinates at the borders. Clamping is one of
 the edge strategies discussed later. A simpler `filterImage` would trim
 the border instead.
 
-```js echo
+```js
 function toFloatImage(imageData) {
   const {width: W, height: H, data} = imageData;
   const out = new Float32Array(W * H * 3);
@@ -760,15 +822,23 @@ function fromFloatImage({width: W, height: H, data}) {
 function showImage(img, scale = 1) {
   return raster.renderImageData(fromFloatImage(img), {scale});
 }
+```
 
-// A discrete Gaussian: the continuous one sampled at integers k = −r..r and
-// normalized so the weights sum to exactly 1.
+A discrete Gaussian is the continuous one sampled at integers ${tex`k = -r..r`}, then normalized so the weights sum to exactly 1:
+
+```js echo
 function gaussianWeights(sigma, r = Math.ceil(3 * sigma - 1e-9)) {
-  const w = Float64Array.from(d3.range(-r, r + 1), (k) => Math.exp(-(k * k) / (2 * sigma * sigma)));
+  const bell = (k) => Math.exp(-(k * k) / (2 * sigma * sigma));
+  const w = Float64Array.from(d3.range(-r, r + 1), bell);
   const total = d3.sum(w);
   return w.map((v) => v / total);
 }
 
+```
+
+The core of the module is one 1D pass. For each pixel, it walks along one axis and sums the weighted neighbors, once for each color channel:
+
+```js echo
 // One 1D pass along x (axis 0) or y (axis 1), with weights w[k + r] = b[k].
 // edge: "clamp" repeats the border pixel, "zero" pads with black, and
 // "renormalize" drops out-of-bounds taps and divides by the weights left.
@@ -789,7 +859,9 @@ function filterPass(img, w, axis, edge = "clamp") {
         }
         const wk = w[k + r];
         const idx = 3 * (axis === 0 ? y * W + p : p * W + x);
-        s0 += data[idx] * wk; s1 += data[idx + 1] * wk; s2 += data[idx + 2] * wk;
+        s0 += data[idx] * wk;
+        s1 += data[idx + 1] * wk;
+        s2 += data[idx + 2] * wk;
         wsum += wk;
       }
       const norm = edge === "renormalize" && wsum !== 0 ? wsum : 1;
@@ -800,12 +872,20 @@ function filterPass(img, w, axis, edge = "clamp") {
   return {width: W, height: H, data: out};
 }
 
-// Vertical pass, then horizontal pass. wy defaults to wx (a symmetric 2D filter).
+```
+
+Two passes make a separable 2D filter:
+
+```js echo
 function filterSeparable(img, wx, edge = "clamp", wy = wx) {
   return filterPass(filterPass(img, wy, 1, edge), wx, 0, edge);
 }
 
-// The same filter applied directly as a (2r+1) × (2r+1) mask, for comparison.
+```
+
+For comparison, here is the same filter applied directly as a ${tex`(2r+1) \times (2r+1)`} mask, with two more nested loops:
+
+```js echo
 function filterDirect(img, w) {
   const {width: W, height: H, data} = img;
   const r = (w.length - 1) / 2;
@@ -819,7 +899,9 @@ function filterDirect(img, w) {
           const px = Math.min(W - 1, Math.max(0, x - i));
           const wk = w[i + r] * w[j + r];
           const idx = 3 * (py * W + px);
-          s0 += data[idx] * wk; s1 += data[idx + 1] * wk; s2 += data[idx + 2] * wk;
+          s0 += data[idx] * wk;
+          s1 += data[idx + 1] * wk;
+          s2 += data[idx + 2] * wk;
         }
       }
       const o = 3 * (y * W + x);
@@ -829,16 +911,22 @@ function filterDirect(img, w) {
   return {width: W, height: H, data: out};
 }
 
-const testFloat = toFloatImage(raster.toImageData(raster.createTestImage(160, 120)));
+```
+
+We work with the test image from Module 02, converted to floating point so that values can go past 255 during filtering:
+
+```js echo
+const testFloat =
+  toFloatImage(raster.toImageData(raster.createTestImage(160, 120)));
 ```
 
 Time both versions on the same Gaussian:
 
-```js echo
+```js
 const sepRadius = view(Inputs.range([1, 12], {value: 4, step: 1, label: "Gaussian radius r (σ = r / 3)"}));
 ```
 
-```js echo
+```js
 const sepResult = (() => {
   const w = gaussianWeights(sepRadius / 3, sepRadius);
   let t = performance.now();
@@ -853,7 +941,7 @@ const sepResult = (() => {
 })();
 ```
 
-```js echo
+```js
 raster.sideBySide([
   [`direct: ${(2 * sepRadius + 1) ** 2} products/pixel, ${sepResult.directMs.toFixed(1)} ms`, showImage(sepResult.direct, 2)],
   [`separable: ${2 * (2 * sepRadius + 1)} products/pixel, ${sepResult.separableMs.toFixed(1)} ms`, showImage(sepResult.separable, 2)]
@@ -876,7 +964,7 @@ whole operation is a single filter:
 
 ${tex.block`I_{\text{sharp}} = (1+\alpha)\,I - \alpha\,(I \star f_{g,\sigma}) = I \star \big((1+\alpha)\,d - \alpha\, f_{g,\sigma}\big)`}
 
-```js echo
+```js
 const sharpForm = view(Inputs.form({
   sigma: Inputs.range([0.5, 4], {value: 1.5, step: 0.1, label: "Gaussian σ (pixels)"}),
   alpha: Inputs.range([0, 3], {value: 1.2, step: 0.05, label: "sharpening amount α"})
@@ -885,13 +973,15 @@ const sharpForm = view(Inputs.form({
 
 ```js echo
 function combineImages(a, b, fn) {
-  return {width: a.width, height: a.height, data: a.data.map((v, k) => fn(v, b.data[k]))};
+  const data = a.data.map((v, k) => fn(v, b.data[k]));
+  return {width: a.width, height: a.height, data};
 }
 const blurred = filterSeparable(testFloat, gaussianWeights(sharpForm.sigma));
-const sharpened = combineImages(testFloat, blurred, (orig, blur) => (1 + sharpForm.alpha) * orig - sharpForm.alpha * blur);
+const sharpened = combineImages(testFloat, blurred, (orig, blur) =>
+  (1 + sharpForm.alpha) * orig - sharpForm.alpha * blur);
 ```
 
-```js echo
+```js
 raster.sideBySide([
   ["original", showImage(testFloat, 2)],
   [`Gaussian blur, σ = ${sharpForm.sigma}`, showImage(blurred, 2)],
@@ -899,7 +989,7 @@ raster.sideBySide([
 ])
 ```
 
-```js echo
+```js
 (() => {
   const g = gaussianWeights(sharpForm.sigma);
   const r = (g.length - 1) / 2;
@@ -942,7 +1032,7 @@ three parameters. That filter is still separable: a Gaussian whose
 center has moved by ${tex`m`} along ${tex`x`} and by ${tex`n`} along
 ${tex`y`}.
 
-```js echo
+```js
 const shadowForm = view(Inputs.form({
   m: Inputs.range([-12, 12], {value: 5, step: 1, label: "shift m (x)"}),
   n: Inputs.range([-12, 12], {value: 5, step: 1, label: "shift n (y)"}),
@@ -959,7 +1049,11 @@ function shiftWeights(w, m) {
   for (let k = -r; k <= r; k++) out[k + m + R] = w[k + r];
   return out;
 }
+```
 
+The object is a mask made by drawing text on a canvas and reading its alpha values. The shifted Gaussian blurs that mask, and the shadow is composited under the text:
+
+```js
 const shadowMask = (() => {
   const canvas = document.createElement("canvas");
   canvas.width = 300;
@@ -975,7 +1069,7 @@ const shadowMask = (() => {
 })();
 ```
 
-```js echo
+```js
 (() => {
   const g = gaussianWeights(shadowForm.sigma);
   const shadow = filterSeparable(shadowMask, shiftWeights(g, shadowForm.m), "zero", shiftWeights(g, shadowForm.n));
@@ -1003,18 +1097,25 @@ and a full cycle per pixel at the edge.
 
 ```js echo
 const zoneSize = 200;
-// Frequency grows linearly with radius: `peak` cycles/pixel at radius size / 2.
+// Frequency grows with radius: `peak` cycles/pixel at radius size / 2.
 function zonePlate(x, y, size = zoneSize, peak = 1) {
   const dx = x - size / 2, dy = y - size / 2;
-  return 0.5 + 0.5 * Math.cos((Math.PI * peak * (dx * dx + dy * dy)) / (size / 2));
+  const phase = (Math.PI * peak * (dx * dx + dy * dy)) / (size / 2);
+  return 0.5 + 0.5 * Math.cos(phase);
 }
 
+```
+
+Rendering it means averaging samples per pixel, using one of three weightings:
+
+```js echo
 // Render the zone plate, averaging n × n sub-samples per pixel.
 // "point": one sample at each pixel center.
 // "box": equal weights over the pixel's own 1 × 1 square.
 // "gaussian": Gaussian weights (σ = 0.5 px) over a 3 × 3 pixel area.
 function renderZonePlate(method, n) {
-  const img = {width: zoneSize, height: zoneSize, data: new Float32Array(zoneSize * zoneSize * 3)};
+  const data = new Float32Array(zoneSize * zoneSize * 3);
+  const img = {width: zoneSize, height: zoneSize, data};
   const span = method === "gaussian" ? 3 : 1;
   const count = method === "point" ? 1 : n * span;
   for (let py = 0; py < zoneSize; py++) {
@@ -1022,8 +1123,9 @@ function renderZonePlate(method, n) {
       let sum = 0, wsum = 0;
       for (let b = 0; b < count; b++) {
         for (let a = 0; a < count; a++) {
-          const ox = method === "point" ? 0.5 : ((a + 0.5) / count) * span - (span - 1) / 2;
-          const oy = method === "point" ? 0.5 : ((b + 0.5) / count) * span - (span - 1) / 2;
+          const offset = (q) => method === "point" ? 0.5 :
+            ((q + 0.5) / count) * span - (span - 1) / 2;
+          const ox = offset(a), oy = offset(b);
           const d2 = (ox - 0.5) ** 2 + (oy - 0.5) ** 2;
           const w = method === "gaussian" ? Math.exp(-d2 / (2 * 0.25)) : 1;
           sum += w * zonePlate(px + ox, py + oy);
@@ -1038,11 +1140,11 @@ function renderZonePlate(method, n) {
 }
 ```
 
-```js echo
+```js
 const zoneSamples = view(Inputs.range([1, 6], {value: 4, step: 1, label: "sub-samples per pixel side"}));
 ```
 
-```js echo
+```js
 raster.sideBySide([
   ["point sampling", showImage(renderZonePlate("point", 1))],
   [`box filter (${zoneSamples}×${zoneSamples} per pixel)`, showImage(renderZonePlate("box", zoneSamples))],
@@ -1074,7 +1176,8 @@ function reconstructArray(a, filter, x, {s = 1, edge = "clamp"} = {}) {
   const r = filter.radius * s;
   let sum = 0, wsum = 0;
   for (let j = Math.ceil(x - r); j <= Math.floor(x + r); j++) {
-    if ((j < 0 || j >= a.length) && edge !== "clamp") continue; // "zero" and "renormalize" drop it
+    // "zero" and "renormalize" drop taps outside the array.
+    if ((j < 0 || j >= a.length) && edge !== "clamp") continue;
     const w = filter.f((x - j) / s) / s;
     sum += a[Math.max(0, Math.min(a.length - 1, j))] * w;
     wsum += w;
@@ -1082,21 +1185,29 @@ function reconstructArray(a, filter, x, {s = 1, edge = "clamp"} = {}) {
   return edge === "renormalize" ? (wsum === 0 ? 0 : sum / wsum) : sum;
 }
 
+```
+
+Resampling evaluates that at each output position. The filter scale `s` is what prevents aliasing: when output samples are farther apart than input samples, the filter grows to match:
+
+```js echo
 // resample(a, xl, xh, n, f) over the source interval (xl, xh).
 // prefilter: false skips the filter scaling, which reduces the box filter
 // to pixel dropping.
-function resample1D(a, xl, xh, n, filter, {prefilter = true, edge = "clamp"} = {}) {
+function resample1D(
+  a, xl, xh, n, filter, {prefilter = true, edge = "clamp"} = {}
+) {
   const dx = (xh - xl) / n;
   const x0 = xl + dx / 2;
   const s = prefilter ? Math.max(1, dx) : 1;
-  return Float64Array.from({length: n}, (_, i) => reconstructArray(a, filter, x0 + i * dx, {s, edge}));
+  return Float64Array.from({length: n}, (_, i) =>
+    reconstructArray(a, filter, x0 + i * dx, {s, edge}));
 }
 ```
 
 In 1D, 16 input samples are resampled to ${tex`n`} output samples over
 the whole sequence, with ${tex`x_l = -0.5`} and ${tex`x_h = 15.5`}:
 
-```js echo
+```js
 const resampleInput = [0.2, 0.2, 0.8, 0.9, 0.3, 0.1, 0.1, 0.6, 0.6, 0.6, 0.2, 0.9, 0.1, 0.8, 0.2, 0.5];
 const resample1Form = view(Inputs.form({
   n: Inputs.range([3, 40], {value: 6, step: 1, label: "output samples n"}),
@@ -1104,7 +1215,7 @@ const resample1Form = view(Inputs.form({
 }));
 ```
 
-```js echo
+```js
 (() => {
   const flt = filters[resample1Form.filter];
   const N = resampleInput.length, n = resample1Form.n;
@@ -1134,25 +1245,38 @@ size and the curve interpolates the input.
 For images, we resample **separably**, rows first and then columns:
 
 ```js echo
-function resampleAxis({width: W, height: H, data}, newN, axis, filter, opts) {
+function resampleAxis(img, newN, axis, filter, opts) {
+  const {width: W, height: H, data} = img;
   const n = axis === 0 ? W : H, lines = axis === 0 ? H : W;
   const outW = axis === 0 ? newN : W, outH = axis === 0 ? H : newN;
   const out = new Float32Array(outW * outH * 3);
   const line = new Float64Array(n);
   for (let k = 0; k < lines; k++) {
     for (let c = 0; c < 3; c++) {
-      for (let j = 0; j < n; j++) line[j] = data[3 * (axis === 0 ? k * W + j : j * W + k) + c];
+      for (let j = 0; j < n; j++) {
+        line[j] = data[3 * (axis === 0 ? k * W + j : j * W + k) + c];
+      }
       const res = resample1D(line, -0.5, n - 0.5, newN, filter, opts);
-      for (let i = 0; i < newN; i++) out[3 * (axis === 0 ? k * outW + i : i * outW + k) + c] = res[i];
+      for (let i = 0; i < newN; i++) {
+        out[3 * (axis === 0 ? k * outW + i : i * outW + k) + c] = res[i];
+      }
     }
   }
   return {width: outW, height: outH, data: out};
 }
 
-function resampleImage(img, newW, newH, filter, opts = {}) {
-  return resampleAxis(resampleAxis(img, newW, 0, filter, opts), newH, 1, filter, opts);
-}
+```
 
+An image resamples along one axis, then the other:
+
+```js echo
+function resampleImage(img, newW, newH, filter, opts = {}) {
+  const rows = resampleAxis(img, newW, 0, filter, opts);
+  return resampleAxis(rows, newH, 1, filter, opts);
+}
+```
+
+```js
 // Nearest-neighbor enlargement with CSS, so small results stay easy to compare.
 function showEnlarged(img, displayWidth) {
   const canvas = showImage(img);
@@ -1167,11 +1291,11 @@ Pixel dropping is box reconstruction at the *input* spacing followed by
 point sampling. The other methods scale the filter to the output
 spacing:
 
-```js echo
+```js
 const downSize = view(Inputs.range([32, 200], {value: 90, step: 1, label: "output size N"}));
 ```
 
-```js echo
+```js
 const zoneInput = (() => {
   const img = {width: 256, height: 256, data: new Float32Array(256 * 256 * 3)};
   for (let y = 0; y < 256; y++) for (let x = 0; x < 256; x++) {
@@ -1182,7 +1306,7 @@ const zoneInput = (() => {
 })();
 ```
 
-```js echo
+```js
 raster.sideBySide([
   ["input, 256 × 256", showEnlarged(zoneInput, 200)],
   ["pixel dropping", showEnlarged(resampleImage(zoneInput, downSize, downSize, filters.box, {prefilter: false}), 200)],
@@ -1200,7 +1324,7 @@ cleanest result of these.
 upsampling, reconstruction dominates, so every filter is used at its
 natural size:
 
-```js echo
+```js
 const sunCrop = (() => {
   const W = 32, H = 24, x0 = 108, y0 = 10;
   const data = new Float32Array(W * H * 3);
@@ -1211,7 +1335,7 @@ const sunCrop = (() => {
 })();
 ```
 
-```js echo
+```js
 raster.sideBySide(["box", "tent", "bspline", "catmullRom", "mitchell"].map((key) =>
   [`${filters[key].name}`, showImage(resampleImage(sunCrop, 256, 192, filters[key]))]))
 ```
@@ -1226,11 +1350,11 @@ Mitchell–Netravali is a good all-around default.
 Near the border, some filter taps fall outside the image. A large blur
 makes the difference between the three strategies easy to see:
 
-```js echo
+```js
 const edgeSigma = view(Inputs.range([1, 10], {value: 6, step: 0.5, label: "Gaussian σ"}));
 ```
 
-```js echo
+```js
 raster.sideBySide(["zero", "clamp", "renormalize"].map((edge) =>
   [`${edge}`, showImage(filterSeparable(testFloat, gaussianWeights(edgeSigma), edge), 2)]))
 ```
@@ -1256,19 +1380,30 @@ A square wave with period 1 is a sum of odd harmonics:
 
 ${tex.block`\text{square}(x) = \frac{4}{\pi} \sum_{n = 1, 3, 5, \dots} \frac{\sin 2\pi n x}{n}`}
 
+Each loop step adds one more odd harmonic, ${tex`n = 2k + 1`}:
+
 ```js echo
+function squarePartial(x, terms) {
+  let s = 0;
+  for (let k = 0; k < terms; k++) {
+    const n = 2 * k + 1;
+    s += Math.sin(2 * Math.PI * n * x) / n;
+  }
+  return (4 / Math.PI) * s;
+}
+```
+
+```js
 const squareTerms = view(Inputs.range([1, 60], {value: 3, step: 1, label: "odd harmonics included"}));
 ```
 
-```js echo
-const squareRows = d3.range(-1, 1.0001, 0.001).map((x) => {
-  let s = 0;
-  for (let k = 0; k < squareTerms; k++) s += Math.sin(2 * Math.PI * (2 * k + 1) * x) / (2 * k + 1);
-  return {x, partial: (4 / Math.PI) * s, square: Math.sin(2 * Math.PI * x) >= 0 ? 1 : -1};
-});
+```js
+const squareRows = d3.range(-1, 1.0001, 0.001).map((x) => ({
+  x, partial: squarePartial(x, squareTerms), square: Math.sin(2 * Math.PI * x) >= 0 ? 1 : -1
+}));
 ```
 
-```js echo
+```js
 Plot.plot({
   height: 220, x: {label: "x"}, y: {label: null, domain: [-1.4, 1.4]},
   marks: [
@@ -1293,19 +1428,20 @@ ${tex`\hat f`} is the real integral of ${tex`f(x)\cos 2\pi u x`}:
 
 ```js echo
 function fourierEven(filter, u, n = 1200) {
-  return integrate((x) => filter.f(x) * Math.cos(2 * Math.PI * u * x), -filter.radius, filter.radius, n);
+  const wave = (x) => filter.f(x) * Math.cos(2 * Math.PI * u * x);
+  return integrate(wave, -filter.radius, filter.radius, n);
 }
 const sinc = (x) => (x === 0 ? 1 : Math.sin(x) / x);
 ```
 
-```js echo
+```js
 const ftForm = view(Inputs.form({
   filter: Inputs.select(Object.keys(filters), {value: "box", label: "filter", format: (k) => filters[k].name}),
   s: Inputs.range([0.5, 3], {value: 1, step: 0.05, label: "scale s"})
 }));
 ```
 
-```js echo
+```js
 const ftAnalytic = {
   box: (u, s) => sinc(Math.PI * s * u),
   tent: (u, s) => sinc(Math.PI * s * u) ** 2,
@@ -1317,7 +1453,7 @@ const ftNumeric = d3.range(0, 3.0001, 0.04).map((u) => ({u, F: fourierEven(ftSca
 const ftCurve = ftAnalytic ? d3.range(0, 3.0001, 0.005).map((u) => ({u, F: ftAnalytic(u, ftForm.s)})) : [];
 ```
 
-```js echo
+```js
 Plot.plot({
   height: 240, x: {label: "frequency u"}, y: {label: "f̂(u)", domain: [-0.3, 1.05]},
   marks: [
@@ -1355,7 +1491,7 @@ sample rate, add a pre-filter, and pick a reconstruction filter. The
 reconstruction filter's transform is scaled to the sample spacing,
 ${tex`\hat f(Tu)`}.
 
-```js echo
+```js
 const specForm = view(Inputs.form({
   fs: Inputs.range([0.8, 4], {value: 1.6, step: 0.05, label: "sample rate fₛ"}),
   prefilter: Inputs.toggle({label: "low-pass (Gaussian) before sampling", value: false}),
@@ -1363,7 +1499,7 @@ const specForm = view(Inputs.form({
 }));
 ```
 
-```js echo
+```js
 const specBase = (u) => (Math.abs(u) < 1 ? 0.5 + 0.5 * Math.cos(Math.PI * u) : 0);
 const specT = 1 / specForm.fs;
 // A spatial Gaussian with σ = 0.6 T, whose transform is a Gaussian in u.
@@ -1389,7 +1525,7 @@ const specLoss = d3.sum(specRows, (d) => d.loss ** 2) / specEnergy;
 const specOverlap = d3.sum(specRows, (d) => Math.min(d.base, d.aliases)) * 0.005;
 ```
 
-```js echo
+```js
 Plot.plot({
   height: 280, x: {label: "frequency u", domain: [-4, 4]}, y: {label: null, domain: [-0.25, 1.3]},
   marks: [
@@ -1428,11 +1564,11 @@ The ideal box in frequency is ${tex`\operatorname{sinc}\pi x`} in space.
 It has infinite extent and many ripples. Truncate it and reconstruct a
 step:
 
-```js echo
+```js
 const sincRadius = view(Inputs.range([2, 24], {value: 6, step: 1, label: "sinc truncated at radius"}));
 ```
 
-```js echo
+```js
 (() => {
   const sincFilter = {name: "truncated sinc", radius: sincRadius, f: (x) => (Math.abs(x) < sincRadius ? sinc(Math.PI * x) : 0)};
   const rows = [sincFilter, filters.mitchell].flatMap((flt) =>
