@@ -18,10 +18,10 @@ import {html} from "npm:htl";
 
 **Phenomenological** models such as Blinn–Phong put a highlight in the
 "right" place by rule of thumb. **Physics-based** models follow the
-physics of light. This module builds the pieces in the order of the
-reading: how light meets smooth metals and dielectrics, a brute-force
-photon tracer, the radiometry that describes light in bulk, the BRDF and
-the transport equation, and Monte Carlo path tracing. The last section
+physics of light. This module builds the pieces so that each uses the one before: how light
+meets a smooth surface, a brute-force photon tracer, the radiometry that
+describes light in bulk, the BRDF that describes a surface, and the rendering
+equation with Monte Carlo path tracing. The last section
 puts it all in WebGPU and needs **Chrome or Edge 113+**. The code is part of the
 reading: each formula is written out and tested here, while the code that only draws the
 demos stays out of sight. Almost every practical rendering algorithm is a faster version
@@ -41,7 +41,7 @@ const deg = (r) => (r * 180) / Math.PI, rad = (d) => (d * Math.PI) / 180;
 const row = (...nodes) => html`<div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start">${nodes}</div>`;
 ```
 
-## Light and Materials
+## Light at a Smooth Surface
 
 ### Photons
 
@@ -71,81 +71,20 @@ ${tex`10^{20}`} photons per second. Real bulbs emit somewhat fewer:
 100 / photonEnergy(500)
 ```
 
-### Fresnel reflectance and Schlick's approximation
+### What happens at a smooth surface
 
-At a smooth metal, light **reflects** like a mirror, or it **refracts** into the metal and
-is quickly **absorbed**. **Dielectrics** are everything that is not a metal: glass, water,
-skin, cloth, and most everyday materials. A smooth dielectric needs only three properties: how
-much light is reflected at each angle and wavelength, how much is absorbed per unit distance
-inside, and the directions of the reflected and refracted rays.
+When light meets a smooth boundary between two materials, part of it **reflects** and part
+**refracts** into the other material. **Dielectrics** are everything that is not a metal: glass,
+water, skin, cloth, and most everyday materials. They let the refracted light travel on.
+**Metals** absorb it almost at once.
 
-For the first of these, the **Fresnel equations** give the reflected fraction, and **Schlick's
-approximation** is used almost everywhere. Here ${tex`\theta`} is the angle between the light's
-direction and the surface normal, and ${tex`R_0`} is the reflectance at normal incidence:
+We answer three questions, in this order:
 
-${tex.block`R(\theta) = R_0 + (1 - R_0)(1 - \cos\theta)^5, \qquad R_0 = \left(\frac{n_t - n_i}{n_t + n_i}\right)^2`}
-
-For a dielectric, ${tex`R_0`} comes from the refractive indices of the incident and transmitted
-sides:
-
-| air | water | window glass | diamond |
-|---|---|---|---|
-| 1.00 | 1.33 | 1.51 | 2.42 |
-
-The code is two lines:
-
-```js echo
-const schlick = (cosTheta, R0) => R0 + (1 - R0) * (1 - cosTheta) ** 5;
-const r0FromIndex = (ni, nt) => ((nt - ni) / (nt + ni)) ** 2;
-```
-
-Glass with ${tex`n = 1.5`} from air should reflect 4% head-on. At a grazing angle, where
-${tex`\cos\theta = 0`}, everything should reflect:
-
-```js echo
-[r0FromIndex(1, 1.5), schlick(0, r0FromIndex(1, 1.5))]
-```
-
-Below, we compare Schlick with the exact equations for an unpolarized dielectric. They average two
-polarizations, and they use the same refraction angle we derive next:
-
-```js echo
-function fresnelExact(cosI, ni, nt) {
-  const sinT2 = (ni / nt) ** 2 * (1 - cosI * cosI);
-  if (sinT2 >= 1) return 1;   // total internal reflection
-  const cosT = Math.sqrt(1 - sinT2);
-  const rs = (ni * cosI - nt * cosT) / (ni * cosI + nt * cosT);
-  const rp = (nt * cosI - ni * cosT) / (nt * cosI + ni * cosT);
-  return (rs * rs + rp * rp) / 2;
-}
-```
-
-```js
-const fresnelIndex = view(Inputs.range([1, 2.5], {value: 1.5, step: 0.01, label: "refractive index n (from air)"}));
-```
-
-```js
-(() => {
-  const R0 = r0FromIndex(1, fresnelIndex);
-  const data = d3.range(0, 90.01, 0.5).flatMap((a) => {
-    const c = Math.cos(rad(a));
-    return [{a, R: fresnelExact(c, 1, fresnelIndex), curve: "exact Fresnel"}, {a, R: schlick(c, R0), curve: "Schlick"},
-      ...[["gold, red", 0.95], ["gold, green", 0.75], ["gold, blue", 0.35]].map(([curve, r0]) => ({a, R: schlick(c, r0), curve}))];
-  });
-  return Plot.plot({height: 260, width: 560, x: {label: "angle of incidence θ (degrees)"}, y: {label: "reflectance R", domain: [0, 1]},
-    color: {legend: true, domain: ["exact Fresnel", "Schlick", "gold, red", "gold, green", "gold, blue"], range: ["black", "orange", "#d33", "#3a3", "#36c"]},
-    marks: [Plot.line(data, {x: "a", y: "R", stroke: "curve", strokeDasharray: (d) => (d.curve === "Schlick" ? "5,3" : null), strokeWidth: 2})]});
-})()
-```
-
-${tex`R_0`} = ${r0FromIndex(1, fresnelIndex).toFixed(4)} for n = ${fresnelIndex}
-(window glass: 1.51, about 4%). Schlick (dashed) tracks the exact curve
-closely, and every material reflects nearly 100% at grazing angles. A
-**metal** has a large, colored ${tex`R_0`} per channel, measured or set
-by eye (gold above); whatever it does not reflect is absorbed. For a
-dielectric, whatever is not reflected is **transmitted**. Use ${tex`\theta`} on
-the **air side**: when light exits the glass, that is the refraction angle
-${tex`\phi`} of the next section.
+| Question | Answer |
+|---|---|
+| Where do the rays go? | mirror reflection (Module 10) and **Snell's law** |
+| How much light reflects? | **Fresnel** reflectance (Schlick) |
+| How much is absorbed inside? | **Beer's law** |
 
 ### Snell's law and the refraction vector
 
@@ -243,7 +182,78 @@ nₜ sin φ = ${(nt * Math.sin(rad(phi))).toFixed(4)}
 Going into a denser medium bends the ray **toward** the normal. Choose
 "glass → air" and raise ${tex`\theta`} past about 41.8°: the refracted
 ray disappears and everything reflects. That is part of what makes glass
-and diamonds sparkle. Line thickness shows the Fresnel split.
+and diamonds sparkle. Line thickness shows how much light reflects and how much
+refracts, from the Fresnel equations of the next section.
+
+### Fresnel reflectance and Schlick's approximation
+
+Now that we know where the rays go, how much light takes each one? The **Fresnel equations** give the reflected fraction, and **Schlick's
+approximation** is used almost everywhere. Here ${tex`\theta`} is the angle between the light's
+direction and the surface normal, and ${tex`R_0`} is the reflectance at normal incidence:
+
+${tex.block`R(\theta) = R_0 + (1 - R_0)(1 - \cos\theta)^5, \qquad R_0 = \left(\frac{n_t - n_i}{n_t + n_i}\right)^2`}
+
+For a dielectric, ${tex`R_0`} comes from the refractive indices of the incident and transmitted
+sides:
+
+| air | water | window glass | diamond |
+|---|---|---|---|
+| 1.00 | 1.33 | 1.51 | 2.42 |
+
+The code is two lines:
+
+```js echo
+const schlick = (cosTheta, R0) => R0 + (1 - R0) * (1 - cosTheta) ** 5;
+const r0FromIndex = (ni, nt) => ((nt - ni) / (nt + ni)) ** 2;
+```
+
+Glass with ${tex`n = 1.5`} from air should reflect 4% head-on. At a grazing angle, where
+${tex`\cos\theta = 0`}, everything should reflect:
+
+```js echo
+[r0FromIndex(1, 1.5), schlick(0, r0FromIndex(1, 1.5))]
+```
+
+Below, we compare Schlick with the exact equations for an unpolarized dielectric. They average two
+polarizations, and they use the refraction angle from Snell's law:
+
+```js echo
+function fresnelExact(cosI, ni, nt) {
+  const sinT2 = (ni / nt) ** 2 * (1 - cosI * cosI);
+  if (sinT2 >= 1) return 1;   // total internal reflection
+  const cosT = Math.sqrt(1 - sinT2);
+  const rs = (ni * cosI - nt * cosT) / (ni * cosI + nt * cosT);
+  const rp = (nt * cosI - ni * cosT) / (nt * cosI + ni * cosT);
+  return (rs * rs + rp * rp) / 2;
+}
+```
+
+```js
+const fresnelIndex = view(Inputs.range([1, 2.5], {value: 1.5, step: 0.01, label: "refractive index n (from air)"}));
+```
+
+```js
+(() => {
+  const R0 = r0FromIndex(1, fresnelIndex);
+  const data = d3.range(0, 90.01, 0.5).flatMap((a) => {
+    const c = Math.cos(rad(a));
+    return [{a, R: fresnelExact(c, 1, fresnelIndex), curve: "exact Fresnel"}, {a, R: schlick(c, R0), curve: "Schlick"},
+      ...[["gold, red", 0.95], ["gold, green", 0.75], ["gold, blue", 0.35]].map(([curve, r0]) => ({a, R: schlick(c, r0), curve}))];
+  });
+  return Plot.plot({height: 260, width: 560, x: {label: "angle of incidence θ (degrees)"}, y: {label: "reflectance R", domain: [0, 1]},
+    color: {legend: true, domain: ["exact Fresnel", "Schlick", "gold, red", "gold, green", "gold, blue"], range: ["black", "orange", "#d33", "#3a3", "#36c"]},
+    marks: [Plot.line(data, {x: "a", y: "R", stroke: "curve", strokeDasharray: (d) => (d.curve === "Schlick" ? "5,3" : null), strokeWidth: 2})]});
+})()
+```
+
+${tex`R_0`} = ${r0FromIndex(1, fresnelIndex).toFixed(4)} for n = ${fresnelIndex}
+(window glass: 1.51, about 4%). Schlick (dashed) tracks the exact curve
+closely, and every material reflects nearly 100% at grazing angles. A
+**metal** has a large, colored ${tex`R_0`} per channel, measured or set
+by eye (gold above); whatever it does not reflect is absorbed. For a
+dielectric, whatever is not reflected is **transmitted**. Use ${tex`\theta`} on
+the **air side**: when light exits the glass, that is the refraction angle
+${tex`\phi`} from Snell's law. Under total internal reflection, ${tex`R = 1`}.
 
 ### Beer's law
 
@@ -291,6 +301,8 @@ const beerA = view(Inputs.form({
 The swatches show white light after traveling distance ${tex`s`}: thin
 glass looks nearly clear, and thick glass shows the tint.
 
+### Opaque looks from clear materials
+
 Many matte, opaque materials are **mixtures of smooth dielectrics**. Air bubbles in ice make it
 opaque, as in a snowball. A roughened surface gives frosted glass. Colored particles in a clear
 binder, which follow Beer's law, give paint. Skin is a rough surface over layers with slightly
@@ -301,7 +313,8 @@ produce a huge range of materials.
 
 ### The sensor and tracing photons
 
-To form an image, we need a **camera**: a box with a **pinhole**, and an array of **photon counters**
+Suppose the scene is built from such materials, plus one light. The simplest way to render it is
+to simulate the photons. First we need a **camera**: a box with a **pinhole**, and an array of **photon counters**
 behind it, like a digital camera's sensor. **Color filters** in front of the sensors respond to blue
 (400–500 nm), green (500–600 nm), and red (600–700 nm). Every counter starts at 0 and adds 1 for
 each photon that hits it. Few photons give black, and many give white.
@@ -400,8 +413,10 @@ A point twice the focal length away should focus twice the focal length behind t
 focusDistance(2, 1)
 ```
 
-A point at another depth focuses in front of or behind the sensor and spreads into a **circle of
-confusion**. That is **depth of field**:
+The sensor sits at distance ${tex`b`}, so **focusing** a camera means changing ${tex`b`}. At
+${tex`b = f`} it focuses at infinity, and a larger ${tex`b`} brings the plane of focus closer. A point at
+another depth focuses in front of or behind the sensor and spreads into a **circle of confusion**. The
+range of depths that still looks sharp is the **depth of field**:
 
 ```js
 const lensForm = view(Inputs.form({
@@ -458,8 +473,8 @@ Blur from both moving objects and a moving camera then appears **automatically**
 Even with a lens, almost no photons from a light reach the camera. So we **reverse** the process: send
 **adjoint photons** from each **pixel**, and record them when they reach a **light**. The color filters
 act as **emission curves** that choose the wavelength, and a photon that hits a light is recorded with a
-weight equal to the light's emission. This is exactly what a ray tracer does, and it is the basis of the
-path tracer below.
+weight equal to the light's emission. This is exactly what a ray tracer does. Radiometry lets us derive it properly, as
+**Monte Carlo path tracing**.
 
 ## Radiometry
 
@@ -495,19 +510,32 @@ Adding a cone of solid angle ${tex`\Delta\sigma`} to an irradiance meter makes i
 
 ${tex.block`L = \frac{\Delta H}{\Delta\sigma} = \frac{\Delta q}{\Delta A\, \Delta\sigma\, \Delta t\, \Delta\lambda}`}
 
-Radiance is what graphics programs usually compute, and it matches our sense of brightness. **It is constant
-along a ray**: the area seen grows as ${tex`r^2`}, while the light reaching the detector falls as
-${tex`1/r^2`}, so the two cancel.
+Radiance is what graphics programs usually compute, and it matches our sense of brightness.
+
+**Radiance is constant along a ray.** Point two radiance meters at the same glowing surface, one near
+and one far. The far one sees more area, which grows as ${tex`r^2`}, while the light from each bit of
+that area falls as ${tex`1/r^2`}. The two cancel, so both meters read the same.
 
 At a surface, the detector is not aligned with the cone, so we add a cosine of ${tex`\theta`}, the angle
 between the cone's axis and the surface normal:
 
 ${tex.block`L_s = \frac{\Delta E}{\Delta\sigma\cos\theta}\ \ (\text{surface radiance, leaving}), \qquad L_f = \frac{\Delta H}{\Delta\sigma\cos\theta}\ \ (\text{field radiance, arriving})`}
 
+### Solid angle in spherical coordinates
+
+To integrate over directions, write a direction ${tex`\mathbf k`} as a pair ${tex`(\theta, \phi)`}:
+${tex`\theta`} is the angle from the surface normal, and ${tex`\phi`} is the azimuth around it (not the
+refraction angle). A small patch of directions covers
+
+${tex.block`d\sigma = \sin\theta\, d\theta\, d\phi, \qquad \int_0^{2\pi}\!\!\int_0^{\pi/2} \sin\theta\, d\theta\, d\phi = 2\pi \text{ sr}`}
+
+so the hemisphere above a surface is ${tex`2\pi`} steradians. That is where the uniform-direction
+density ${tex`p = 1/2\pi`} below comes from.
+
 ### Everything from radiance
 
-Radiance is the **fundamental** quantity; the others follow from it. With ${tex`\mathbf k`} an incident
-direction above the surface, at angle ${tex`\theta`} from the normal and azimuth ${tex`\phi`}:
+Radiance is the **fundamental** quantity; the others follow from it. Irradiance sums the field radiance
+over the hemisphere:
 
 ${tex.block`H = \int_{\text{all }\mathbf k} L_f(\mathbf k)\cos\theta\, d\sigma = \int_0^{2\pi}\!\!\int_0^{\pi/2} L_f\cos\theta\sin\theta\, d\theta\, d\phi = \pi L_f \quad\text{for constant } L_f`}
 
@@ -536,27 +564,40 @@ html`<pre>estimate of H = ${estimateIrradiance(1, radianceN).toFixed(4)}   (π L
 The factor ${tex`\pi`}, not ${tex`2\pi`}, comes from the cosine: light
 arriving at a grazing angle spreads over more area.
 
-## Scattering and Light Transport
+## Describing Surfaces: the BRDF
 
-### The BRDF and energy conservation
+### The BRDF
 
-Rather than modeling every scratch, we describe a rough surface **statistically**:
+The photon tracer only knew **smooth** surfaces, so a rough one would need every scratch modeled as
+geometry. Instead, we keep the geometry smooth and describe the roughness **statistically**, with the
+**bidirectional reflectance distribution function**:
 
 ${tex.block`\rho(\mathbf k_i, \mathbf k_o) = \frac{L_s(\mathbf k_o)}{H(\mathbf k_i)}`}
 
-This is the **bidirectional reflectance distribution function**, a 4D function of two directions, in units of
-${tex`\text{sr}^{-1}`}, so ${tex`\rho = 1/\pi`} is not a fraction. **Both** ${tex`\mathbf k_i`} (toward the
-light) and ${tex`\mathbf k_o`} (toward the viewer) point **away** from the surface. It uses irradiance, not
-radiance, so it does not depend on the size or shape of the light. Volumes use the matching idea, a **phase
-function**, which is a PDF over scattering directions.
+Light from ${tex`\mathbf k_i`} delivers irradiance ${tex`H`}. Seen from ${tex`\mathbf k_o`}, the surface has
+radiance ${tex`L_s`}. The BRDF is their ratio. **Both** ${tex`\mathbf k_i`} (toward the light) and
+${tex`\mathbf k_o`} (toward the viewer) point **away** from the surface. It is a 4D function of two
+directions, in units of ${tex`\text{sr}^{-1}`}: a density, not a fraction. A white matte surface has
+${tex`\rho = 1/\pi`}, and near the mirror direction ${tex`\rho`} can exceed 1. Dividing by ${tex`H`} makes
+${tex`\rho`} a property of the **material** alone, not of the light's size or shape.
 
-What fraction of the light from ${tex`\mathbf k_i`} is reflected? This is the **directional hemispherical
-reflectance**, and energy conservation requires ${tex`0 \le R \le 1`}:
+### Energy conservation and the Lambertian BRDF
+
+The BRDF is a density, so it does not directly say **how much** light a surface reflects. To get a
+fraction, shine light from **one** direction ${tex`\mathbf k_i`} and add up the reflected light over
+**every** outgoing direction. This is the **directional hemispherical reflectance**:
 
 ${tex.block`R(\mathbf k_i) = \frac{E}{H} = \int_{\text{all }\mathbf k_o} \rho(\mathbf k_i, \mathbf k_o)\cos\theta_o\, d\sigma_o`}
 
+${tex`R(\mathbf k_i)`} is the surface's **total reflectivity** for light from ${tex`\mathbf k_i`}: light out
+(${tex`E`}) over light in (${tex`H`}). The rest is absorbed or transmitted, so energy conservation requires
+${tex`0 \le R \le 1`}. ${tex`R`} can change with ${tex`\mathbf k_i`}: glass reflects little light head-on but
+much more at grazing angles. That is why ${tex`R`} is defined per incoming direction (**directional**), summed
+over all outgoing ones (**hemispherical**). This ${tex`R`} is not Schlick's ${tex`R(\theta)`}, which applies
+only to smooth surfaces.
+
 An ideal diffuse surface has a **constant** BRDF, ${tex`\rho = C`}. It looks equally bright from every
-direction. Then ${tex`R = \int_0^{2\pi}\!\int_0^{\pi/2} C\cos\theta_o\sin\theta_o\, d\theta_o\, d\phi_o = \pi C`},
+direction. The same integral that gave ${tex`H = \pi L_f`} gives ${tex`R = \int_0^{2\pi}\!\int_0^{\pi/2} C\cos\theta_o\sin\theta_o\, d\theta_o\, d\phi_o = \pi C`},
 so ${tex`\rho = R/\pi`}. A perfect white Lambertian surface has ${tex`\rho = 1/\pi`}, which is the ${tex`\pi`}
 in the Lambert term from Module 05.
 
@@ -611,53 +652,84 @@ near normal incidence, for every ${tex`p`}. It falls at grazing angles,
 where more and more of the lobe dips below the surface. Normalization is why physically based materials keep their
 brightness when their roughness changes.
 
-### The transport equation
+### Materials in practice
+
+To picture a BRDF, fix **one** incoming direction. From the hit point, draw an arrow in each outgoing
+direction, as long as the light reflected that way (${tex`\propto \rho\cos\theta_o`}). The arrow tips trace a
+shape, and each bulge is a **lobe**:
+
+- **Diffuse:** a round lobe. Light leaves in every direction, most of it straight up (Lambertian).
+- **Glossy:** a lobe around the mirror direction. The narrower the lobe, the shinier the surface. The Phong
+  lobes plotted above are glossy lobes.
+- **Retroreflective:** a lobe pointing back toward the light, as on road signs.
+- **Impulse:** all light leaves in **one** direction (mirror, glass). This is a delta function.
+
+Real materials **add** lobes. Varnished wood is diffuse (wood) plus glossy (varnish), with the glossy lobe
+weighted by Fresnel (Schlick). The **Burley/Disney** model, used in film, games, and product design, is such a
+mix.
+
+### The microfacet glossy lobe
+
+The dominant glossy lobe is **GGX**. It models a rough surface as tiny mirrors, called **microfacets**. With unit ${tex`\mathbf l = \mathbf k_i`} and
+${tex`\mathbf v = \mathbf k_o`}, only facets whose normal is the half vector ${tex`\mathbf h`} reflect ${tex`\mathbf l`} into
+${tex`\mathbf v`}:
+
+${tex.block`\rho_{\text{glossy}} = \frac{D(\mathbf h)\, G(\mathbf l, \mathbf v)\, F(\mathbf v\cdot\mathbf h)}{4\,(\mathbf n\cdot\mathbf l)(\mathbf n\cdot\mathbf v)}`}
+
+- ${tex`D`} is the **distribution** of facet normals, the density of facets facing ${tex`\mathbf h`}.
+- ${tex`G`} is **masking–shadowing**, the fraction of those facets that both ${tex`\mathbf l`} and ${tex`\mathbf v`} can see.
+- ${tex`F`} is the Fresnel reflectance of a facet, by Schlick with ${tex`\cos\theta = \mathbf v\cdot\mathbf h`}.
+- The denominator converts from the facets' area and angles to the surface's.
+
+The **GGX** distribution, with ${tex`\alpha`} larger for rougher surfaces, controls the highlight's shape:
+
+${tex.block`D(\mathbf h) = \frac{\alpha^2}{\pi\big((\mathbf n\cdot\mathbf h)^2(\alpha^2 - 1) + 1\big)^2}, \qquad \alpha = \text{roughness}^2`}
+
+```js echo
+function ggxD(cosH, roughness) {
+  const a2 = roughness ** 4;
+  return a2 / (Math.PI * (cosH * cosH * (a2 - 1) + 1) ** 2);
+}
+```
+
+At the peak, where ${tex`\mathbf h = \mathbf n`}, this equals ${tex`1/(\pi\alpha^2)`}. So going from roughness 0.5 to 0.25 quarters
+${tex`\alpha`} and should make the peak 16 times taller:
+
+```js echo
+ggxD(1, 0.25) / ggxD(1, 0.5)
+```
+
+```js
+Plot.plot({height: 200, width: 560, x: {label: "angle between n and h (degrees)"}, y: {label: "D (log scale)", type: "log", domain: [1e-3, 1e3]}, color: {legend: true, type: "ordinal"},
+  marks: [Plot.line([0.1, 0.3, 0.5, 0.8].flatMap((rough) => d3.range(0, 89.5, 0.5).map((a) => {
+    return {a, D: ggxD(Math.cos(rad(a)), rough), roughness: rough};
+  })), {x: "a", y: "D", stroke: "roughness", strokeWidth: 2})]})
+```
+
+Low roughness gives a tall, narrow lobe: a sharp, bright highlight.
+High roughness spreads it out.
+
+## Light Transport and Path Tracing
+
+### The rendering equation
 
 Light arriving with field radiance ${tex`L_f(\mathbf k_i)`} through a small solid angle gives irradiance
 ${tex`L_f\cos\theta_i\,\Delta\sigma_i`}, so it adds ${tex`\rho\, L_f\cos\theta_i\,\Delta\sigma_i`} to the
 outgoing radiance. Summing over all directions, and adding the radiance ${tex`L_e`} the surface **emits**
-itself, gives the **transport (rendering) equation** (Kajiya, 1986; Immel, Cohen, and Greenberg, 1986):
+itself, gives the **rendering equation** (Kajiya, 1986; Immel, Cohen, and Greenberg, 1986). The book calls it the
+**transport equation**:
 
 ${tex.block`L_s(\mathbf k_o) = L_e(\mathbf k_o) + \int \rho(\mathbf k_i, \mathbf k_o)\, L_f(\mathbf k_i)\cos\theta_i\, d\sigma_i`}
 
 ${tex`L_e`} is zero except on lights, and the book's version omits it. The equation is **recursive**, since each
 ${tex`L_f`} is another surface's ${tex`L_s`}.
 
-### Area form and visibility
-
-Each incoming direction comes from a surface point ${tex`\mathbf x'`}, whose normal makes angle ${tex`\theta'`}
-with the direction to ${tex`\mathbf x`}. A patch ${tex`dA'`} there covers solid angle
-${tex`d\sigma_i = \cos\theta'\,dA'/\lVert\mathbf x - \mathbf x'\rVert^2`}, so, leaving out ${tex`L_e`},
-
-${tex.block`L_s(\mathbf x, \mathbf k_o) = \int_{\text{all }\mathbf x'} \frac{\rho(\mathbf k_i, \mathbf k_o)\, L_s(\mathbf x', \mathbf x - \mathbf x')\, v(\mathbf x, \mathbf x')\cos\theta_i\cos\theta'}{\lVert\mathbf x - \mathbf x'\rVert^2}\, dA'`}
-
-The **visibility function** ${tex`v(\mathbf x, \mathbf x')`} is 1 when the two points see each other and 0 otherwise. It
-moves the complexity from the domain into the integrand. The geometry term translates directly to code, and the
-direct lighting shader below uses exactly this:
-
-```js echo
-const areaTerm = (cosI, cosLight, dist2) => (cosI * cosLight) / dist2;
-```
-
-Doubling the distance to a light patch should quarter its contribution:
-
-```js echo
-areaTerm(1, 1, 2 ** 2) / areaTerm(1, 1, 1)
-```
-
-### Materials in practice
-
-Visible structure, like carpet pile, belongs in the **geometry**. Invisible microstructure, like paper fibers,
-belongs in the **BRDF**. Industry practice combines **lobes**, weighted by constants or by Fresnel. The
-**Burley/Disney** model, with diffuse, glossy, sheen, and more, is widely used in film, games, and product
-design. Its dominant glossy lobe is the **GGX** microfacet model, a statistical distribution of microfacet
-normals, which we build at the end of this module.
-
 ### Monte Carlo ray tracing
 
-Apply Module 11's estimator to the transport equation. With **one** random direction ${tex`\mathbf q \sim p`}:
+Apply Module 11's estimator, ${tex`\int f\,d\sigma \approx \frac1N\sum_j f(\mathbf q_j)/p(\mathbf q_j)`}, to the
+rendering equation with **one** random direction ${tex`\mathbf q \sim p`}:
 
-${tex.block`L_s(\mathbf k_o) \approx \frac{\rho(\mathbf q, \mathbf k_o)\, L_f(\mathbf q)\cos\theta_i}{p(\mathbf q)}, \qquad p = \frac{1}{2\pi}\ \text{(uniform hemisphere)}`}
+${tex.block`L_s(\mathbf k_o) \approx L_e(\mathbf k_o) + \frac{\rho(\mathbf q, \mathbf k_o)\, L_f(\mathbf q)\cos\theta_i}{p(\mathbf q)}, \qquad p = \frac{1}{2\pi}\ \text{(uniform hemisphere)}`}
 
 ${tex`L_f(\mathbf q)`} is itself an integral: the radiance from whatever surface ${tex`\mathbf q`} points to. So
 we estimate it the same way at the next hit, and recurse. This is **path tracing**:
@@ -672,9 +744,10 @@ function radiance(o, d) {
 }
 ```
 
+This is the **adjoint photon tracer** of *Reversing time*, now derived from radiometry.
 Here ${tex`\mathbf q`} plays ${tex`\mathbf k_i`} and ${tex`-\mathbf d`} plays ${tex`\mathbf k_o`}: both point away
 from the surface. This works because expected values add, even for dependent terms. Each pixel averages many
-random paths, and the noise falls as ${tex`1/\sqrt N`}.
+such random paths, which is the ${tex`\frac1N\sum`}, and the noise falls as ${tex`1/\sqrt N`}.
 
 ### Termination
 
@@ -736,16 +809,46 @@ Russian roulette L ≈ ${mean.toFixed(4)} ± ${(sd / Math.sqrt(paths)).toFixed(4
 })()
 ```
 
+### Area form and visibility
+
+Small, bright lights are a problem: a random bounce rarely hits one, so the image is **very noisy**. Instead,
+we pick **points on the light** and aim at them. That needs the rendering equation over **area**, not
+directions. Each direction from ${tex`\mathbf x`} ends at a surface point ${tex`\mathbf x'`}. A small patch
+${tex`dA'`} there, seen from ${tex`\mathbf x`}, covers solid angle
+${tex`d\sigma_i = \cos\theta'\,dA'/\lVert\mathbf x - \mathbf x'\rVert^2`}: a **farther** patch looks smaller
+(${tex`1/r^2`}), and a **tilted** one looks smaller (${tex`\cos\theta'`}, the angle between the normal at
+${tex`\mathbf x'`} and the direction to ${tex`\mathbf x`}). Substituting, and leaving out ${tex`L_e`},
+
+${tex.block`L_s(\mathbf x, \mathbf k_o) = \int_{\text{all }\mathbf x'} \frac{\rho(\mathbf k_i, \mathbf k_o)\, L_s(\mathbf x', \mathbf x - \mathbf x')\, v(\mathbf x, \mathbf x')\cos\theta_i\cos\theta'}{\lVert\mathbf x - \mathbf x'\rVert^2}\, dA'`}
+
+Here ${tex`\mathbf k_i`} points from ${tex`\mathbf x`} toward ${tex`\mathbf x'`}, and there are now **two**
+cosines, one at each end. Some points ${tex`\mathbf x'`} are blocked. The **visibility function**
+${tex`v(\mathbf x, \mathbf x')`} is 1 when the two points see each other and 0 otherwise, so we can integrate
+over **all** surfaces and let ${tex`v`} drop the hidden ones. Integrating over just the lights gives the
+**direct** light at ${tex`\mathbf x`}. The geometry term translates directly to code, and the direct lighting
+shader below uses exactly this:
+
+```js echo
+const areaTerm = (cosI, cosLight, dist2) => (cosI * cosLight) / dist2;
+```
+
+Doubling the distance to a light patch should quarter its contribution:
+
+```js echo
+areaTerm(1, 1, 2 ** 2) / areaTerm(1, 1, 1)
+```
+
 ### Direct lighting
 
-Small, bright lights are rarely hit by chance, so the image is **very noisy**. We compute their contribution
-**separately**: `directLightAt` samples **points on the lights**, using the area form, and casts **shadow rays**.
+We **split** the light reaching ${tex`\mathbf x`} into two parts, each computed the easy way. **Direct** light,
+straight from a light, uses the area form: `directLightAt` samples **points on the lights** and casts **shadow
+rays** for ${tex`v`}. **Indirect** light, bounced off other surfaces, uses the random bounce as before:
 
 ```js run=false
 return directLightAt(x) + (brdf(q, -d) * cosThetaI / p(q)) * radiance(x, q);
 ```
 
-A light hit by the camera ray, or seen in a mirror, gets no `directLightAt` term, so its emission must be added there,
+Count each light **once**. A light hit by the camera ray, or seen in a mirror, gets no `directLightAt` term, so its emission must be added there,
 or it renders black. When a later random bounce hits a light, do **not** add its emission again:
 `directLightAt` already counted that light at the previous hit. **Impulse** materials (mirrors, glass) have
 delta-function BRDFs and need an explicit branch, as in Module 10.
@@ -1212,49 +1315,10 @@ Things to try:
 
 ### A physically based material for rasterization
 
-Real-time renderers use the same physics without paths: a Lambertian diffuse lobe ${tex`\rho = R/\pi`} plus a **glossy**
-lobe, weighted by Fresnel.
+Real-time renderers use the same physics without paths: a Lambertian diffuse lobe ${tex`\rho = R/\pi`} plus the
+GGX lobe of *The microfacet glossy lobe* above, weighted by Fresnel.
 
-A rough surface is modeled as tiny mirrors, called **microfacets**. With unit ${tex`\mathbf l = \mathbf k_i`} and
-${tex`\mathbf v = \mathbf k_o`}, only facets whose normal is the half vector ${tex`\mathbf h`} reflect ${tex`\mathbf l`} into
-${tex`\mathbf v`}:
-
-${tex.block`\rho_{\text{glossy}} = \frac{D(\mathbf h)\, G(\mathbf l, \mathbf v)\, F(\mathbf v\cdot\mathbf h)}{4\,(\mathbf n\cdot\mathbf l)(\mathbf n\cdot\mathbf v)}`}
-
-- ${tex`D`} is the **distribution** of facet normals, the density of facets facing ${tex`\mathbf h`}.
-- ${tex`G`} is **masking–shadowing**, the fraction of those facets that both ${tex`\mathbf l`} and ${tex`\mathbf v`} can see.
-- ${tex`F`} is the Fresnel reflectance of a facet, by Schlick with ${tex`\cos\theta = \mathbf v\cdot\mathbf h`}.
-- The denominator converts from the facets' area and angles to the surface's.
-
-The **GGX** distribution, with ${tex`\alpha`} larger for rougher surfaces, controls the highlight's shape:
-
-${tex.block`D(\mathbf h) = \frac{\alpha^2}{\pi\big((\mathbf n\cdot\mathbf h)^2(\alpha^2 - 1) + 1\big)^2}, \qquad \alpha = \text{roughness}^2`}
-
-```js echo
-function ggxD(cosH, roughness) {
-  const a2 = roughness ** 4;
-  return a2 / (Math.PI * (cosH * cosH * (a2 - 1) + 1) ** 2);
-}
-```
-
-At the peak, where ${tex`\mathbf h = \mathbf n`}, this equals ${tex`1/(\pi\alpha^2)`}. So going from roughness 0.5 to 0.25 quarters
-${tex`\alpha`} and should make the peak 16 times taller:
-
-```js echo
-ggxD(1, 0.25) / ggxD(1, 0.5)
-```
-
-```js
-Plot.plot({height: 200, width: 560, x: {label: "angle between n and h (degrees)"}, y: {label: "D (log scale)", type: "log", domain: [1e-3, 1e3]}, color: {legend: true, type: "ordinal"},
-  marks: [Plot.line([0.1, 0.3, 0.5, 0.8].flatMap((rough) => d3.range(0, 89.5, 0.5).map((a) => {
-    return {a, D: ggxD(Math.cos(rad(a)), rough), roughness: rough};
-  })), {x: "a", y: "D", stroke: "roughness", strokeWidth: 2})]})
-```
-
-Low roughness gives a tall, narrow lobe: a sharp, bright highlight.
-High roughness spreads it out.
-
-In the shader, each of those factors takes a line or two. ${tex`G`} is the Schlick–GGX approximation for a direct light:
+In the shader, each factor of that lobe takes a line or two. ${tex`G`} is the Schlick–GGX approximation for a direct light:
 
 ```js echo
 const wgslGlossyTerms = `
@@ -1286,7 +1350,7 @@ fn brdf(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>,
 }`;
 ```
 
-The fragment shader multiplies that by the light and the cosine, as the transport equation says, and then tone maps. For a point light in a real
+The fragment shader multiplies that by the light and the cosine, as the rendering equation says, and then tone maps. For a point light in a real
 scene, the light's term would be ${tex`I/r^2`} from Module 05; here it is a constant strength. The grid below uses one shader for ten spheres:
 dielectric on the top row, metal on the bottom, with roughness rising from left to right.
 
@@ -1386,28 +1450,30 @@ see Fresnel brighten the dielectric rims.
 
 ## Check Your Understanding
 
-1. What is ${tex`R_0`} for diamond (${tex`n = 2.42`}) seen from air? What is ${tex`R`} at 90°?
-2. Light goes from water (1.33) into air. What is the critical angle?
+1. Light goes from water (1.33) into air. What is the critical angle?
+2. What is ${tex`R_0`} for diamond (${tex`n = 2.42`}) seen from air? What is ${tex`R`} at 90°?
 3. Green glass has ${tex`a = (0.5, 0.9, 0.6)`} per cm. What fraction of red light passes through 3 cm?
 4. Why does a photon tracer need so many photons, and what does reversing time fix?
 5. Why is ${tex`H = \pi L`}, not ${tex`2\pi L`}, for uniform radiance?
 6. Derive ${tex`\rho = R/\pi`} for a Lambertian surface.
-7. In the furnace test, why is a fixed depth cap biased, and why is Russian roulette not?
-8. With cosine-weighted sampling, why does the path throughput for a Lambertian bounce reduce to the albedo?
-9. Why must a path tracer with direct lighting not also count emission when a diffuse bounce hits the light?
+7. Why is the rendering equation recursive?
+8. In the furnace test, why is a fixed depth cap biased, and why is Russian roulette not?
+9. With cosine-weighted sampling, why does the path throughput for a Lambertian bounce reduce to the albedo?
+10. Why must a path tracer with direct lighting not also count emission when a diffuse bounce hits the light?
 
 <details>
 <summary>Answers</summary>
 
-1. ${tex`R_0 = (1.42/3.42)^2 \approx 0.172`}. At 90°, ${tex`R = 1`}.
-2. ${tex`\arcsin(1/1.33) \approx 48.8°`}.
+1. ${tex`\arcsin(1/1.33) \approx 48.8°`}.
+2. ${tex`R_0 = (1.42/3.42)^2 \approx 0.172`}. At 90°, ${tex`R = 1`}.
 3. ${tex`0.5^3 = 0.125`}.
 4. Very few photons from a light happen to reach a small aperture. Tracing from the pixels toward the lights (ray tracing) only follows paths that matter to the image.
-5. The ${tex`\cos\theta`} weighting: ${tex`\int\cos\theta\,d\sigma = \pi`} over the hemisphere.
+5. The ${tex`\cos\theta`} weighting: ${tex`\int\cos\theta\,d\sigma = \pi`} over the hemisphere, while ${tex`\int d\sigma = 2\pi`}.
 6. ${tex`R = \int C\cos\theta_o\,d\sigma_o = \pi C`}, so ${tex`C = R/\pi`}.
-7. The cap drops every term after a fixed depth, so the estimate is always too low. Roulette keeps every term with probability ${tex`q^k`} and divides by the same factor, so the expected value is unchanged.
-8. ${tex`\rho\cos\theta/p = (R/\pi)\cos\theta/(\cos\theta/\pi) = R`}.
-9. That light was already counted by the shadow ray at the previous hit. Counting it again would double it. After mirrors and glass, there was no direct-lighting step, so emission is counted.
+7. The incoming field radiance ${tex`L_f`} at one point is the surface radiance ${tex`L_s`} leaving some other point, which is given by the same equation.
+8. The cap drops every term after a fixed depth, so the estimate is always too low. Roulette keeps every term with probability ${tex`q^k`} and divides by the same factor, so the expected value is unchanged.
+9. ${tex`\rho\cos\theta/p = (R/\pi)\cos\theta/(\cos\theta/\pi) = R`}.
+10. That light was already counted by the shadow ray at the previous hit. Counting it again would double it. After mirrors and glass, there was no direct-lighting step, so emission is counted.
 
 </details>
 
@@ -1428,19 +1494,19 @@ see Fresnel brighten the dielectric rims.
 
 ## Summary
 
-- **Materials:** metals reflect or absorb; dielectrics reflect or
-  refract. Schlick's ${tex`R(\theta)`}, Snell's law and the refraction
-  vector, total internal reflection, and Beer's law ${tex`I(s) = I(0)a^s`}.
+- **Smooth surfaces:** Snell's law and the refraction vector, total
+  internal reflection, Schlick's ${tex`R(\theta)`} for dielectrics and
+  metals, and Beer's law ${tex`I(s) = I(0)a^s`}.
 - **Brute force:** random photons and reflect-or-refract decisions give
   accurate but slow images. Lenses, time, and reversing direction give
   depth of field, motion blur, and ray tracing.
-- **Radiometry:** radiance is constant along rays, and ${tex`H = \pi L`}
-  for uniform light.
-- **Transport:** the BRDF, directional hemispherical reflectance and
-  energy conservation, Lambertian ${tex`\rho = R/\pi`}, and the recursive
-  rendering equation.
-- **Monte Carlo:** path tracing with throughput, direct lighting with
-  shadow rays, special handling for impulses, and Russian roulette.
+- **Radiometry:** spectral energy, power, irradiance, and radiance.
+  Radiance is constant along rays, and ${tex`H = \pi L`} for uniform light.
+- **BRDF:** ${tex`\rho = L_s/H`}, energy conservation, Lambertian
+  ${tex`\rho = R/\pi`}, lobes, and the GGX microfacet lobe.
+- **Transport:** the recursive rendering equation, solved by Monte Carlo
+  path tracing with Russian roulette, plus direct lighting with shadow
+  rays through the area form.
 - **WebGPU:** an HDR progressive path tracer with an area light, glass,
   and a thin lens, and a GGX metallic–roughness material for
   rasterization.
